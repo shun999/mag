@@ -1,0 +1,19 @@
+﻿# checkpoints / weights
+AutoEncoder/checkpoints/
+*.pth
+*.pt
+
+# generated outputs (data augmentation results)
+DataAug/output/
+
+# common large artifacts
+*.zip
+*.npz
+*.pkl
+*.h5
+*.onnx
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
