@@ -3,7 +3,7 @@ AutoEncoder/checkpoints/
 *.pth
 *.pt
 
-# generated outputs (data augmentation results)
+# generated images / outputs
 DataAug/output/
 
 # common large artifacts
