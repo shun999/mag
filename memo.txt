@@ -1,0 +1,4 @@
+# Memo for Deepstation520 (NVIDIA RTX A6000)
+NVIDIA-SMI 515.43.04    Driver Version: 515.43.04    CUDA Version: 11.7
+python version: 3.11.14
+Pytorch version: 2.0.1+cu117
