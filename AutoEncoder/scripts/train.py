@@ -70,11 +70,12 @@ def validate(model, dataloader, criterion, device):
 
 
 def main():
+    output_path = Path('/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output')
     parser = argparse.ArgumentParser(description='Train AutoEncoder')
     parser.add_argument(
         '--data_dir',
         type=str,
-        default=r'/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output',
+        default=r'/media/dl-box/ADATA SE800/Toyota/mag/DataAug/output',
         help='画像データディレクトリのパス'
     )
     parser.add_argument('--batch_size', type=int, default=32, help='バッチサイズ')
@@ -82,13 +83,13 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-3, help='学習率')
     parser.add_argument('--latent_dim', type=int, default=128, help='潜在空間の次元数')
     parser.add_argument('--image_size', type=int, nargs=2, default=[64, 64], help='画像サイズ [height width]')
-    parser.add_argument('--save_dir', type=str, default='./checkpoints', help='モデル保存ディレクトリ')
-    parser.add_argument('--log_dir', type=str, default='./logs', help='ログ保存ディレクトリ')
+    parser.add_argument('--save_dir', type=str, default= output_path/'checkpoints', help='モデル保存ディレクトリ')
+    parser.add_argument('--log_dir', type=str, default=output_path/'logs', help='ログ保存ディレクトリ')
     parser.add_argument('--device', type=str, default='auto', help='デバイス (auto/cuda/cpu)')
     parser.add_argument('--num_workers', type=int, default=4, help='データローダーのワーカー数')
     parser.add_argument('--early_stopping', action='store_true', help='Early Stoppingを使用する')
-    parser.add_argument('--early_stopping_patience', type=int, default=10, help='Early Stoppingの忍耐度（エポック数）')
-    parser.add_argument('--plot_dir', type=str, default='./plots', help='グラフ保存ディレクトリ')
+    parser.add_argument('--early_stopping_patience', type=int, default=30, help='Early Stoppingの忍耐度（エポック数）')
+    parser.add_argument('--plot_dir', type=str, default=output_path/'plots', help='グラフ保存ディレクトリ')
     
     args = parser.parse_args()
     
