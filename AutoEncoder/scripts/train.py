@@ -72,7 +72,7 @@ def main():
     parser.add_argument(
         '--data_dir',
         type=str,
-        default=r'C:\WorkSpace\Toyota\mag\DataAug\output',
+        default=r'/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output',
         help='画像データディレクトリのパス'
     )
     parser.add_argument('--batch_size', type=int, default=32, help='バッチサイズ')

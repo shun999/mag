@@ -182,15 +182,9 @@ def expand_folder_each_image_to_n(
 
 if __name__ == "__main__":
     # ====== ここを変更してください ======
-<<<<<<< HEAD
-    INPUT_DIR = r"./DataAug/data/Fe1.5"       # 入力フォルダ（複数画像）
-    OUTPUT_DIR = r"./DataAug/output"  # 出力フォルダ
-    N_OUT_EACH = 50                   # 各画像から生成する枚数
-=======
     INPUT_DIR = r"/media/dl-box/ADATA SE800/Toyota/mag/DataAug/data"       # 入力フォルダ（複数画像）
     OUTPUT_DIR = r"/media/dl-box/ADATA SE800/Toyota/mag/DataAug/output"  # 出力フォルダ
     N_OUT_EACH = 50                  # 各画像から生成する枚数
->>>>>>> origin/Deepstation520
 
     # サイズを揃えるなら (W,H)。揃えないなら None
     OUT_SIZE = None  # 例: (512, 512)
