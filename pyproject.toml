@@ -11,6 +11,7 @@ dependencies = [
   "tensorboard==2.13.0",
   "protobuf<4",
   "tqdm>=4.67.2",
+  "matplotlib>=3.10.8",
 ]
 
 # torch系は必ず PyTorch cu117 index から取る（PyPIに逃がさない）

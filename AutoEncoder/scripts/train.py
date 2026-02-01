@@ -79,7 +79,7 @@ def main():
         help='画像データディレクトリのパス'
     )
     parser.add_argument('--batch_size', type=int, default=32, help='バッチサイズ')
-    parser.add_argument('--epochs', type=int, default=50, help='エポック数')
+    parser.add_argument('--epochs', type=int, default=3, help='エポック数')
     parser.add_argument('--lr', type=float, default=1e-3, help='学習率')
     parser.add_argument('--latent_dim', type=int, default=128, help='潜在空間の次元数')
     parser.add_argument('--image_size', type=int, nargs=2, default=[64, 64], help='画像サイズ [height width]')
