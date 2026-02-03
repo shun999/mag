@@ -22,7 +22,7 @@ python mag/AnomalyDetection/scripts/anomaly_detection.py \
     --anomaly_data_dir "C:\WorkSpace\Toyota\mag\AnomalyDetection\data\Fe2.5"
 ```
 ```
-python C:\WorkSpace\Toyota\mag\AnomalyDetection\scripts\anomaly_detection.py --checkpoint "C:\WorkSpace\Toyota\mag\AutoEncoder\checkpoints\final_model.pth" --anomaly_data_dir "C:\WorkSpace\Toyota\mag\AnomalyDetection\data\Fe2.5" --normal_data_dir "C:\WorkSpace\Toyota\mag\AutoEncoder\output\reconstructions"
+python "/media/dl-box/ADATA SE800/Toyota/mag/AnomalyDetection/scripts/anomaly_detection.py" --checkpoint "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/checkpoints/best_model.pth" --anomaly_data_dir "/media/dl-box/ADATA SE800/Toyota/mag/AnomalyDetection/data/Fe15" --normal_data_dir "/media/dl-box/ADATA SE800/Toyota/mag/DataAug/output"
 ```
 
 ### 全パラメータ指定

@@ -64,7 +64,7 @@ python mag/AutoEncoder/inference.py \
     --output_dir ./reconstructions
 ```
 ```
-python C:\WorkSpace\Toyota\mag\AutoEncoder\scripts\inference.py --checkpoint C:\WorkSpace\Toyota\mag\AutoEncoder\checkpoints\best_model.pth --image_dir "C:\WorkSpace\Toyota\mag\DataAug\output" --num_samples 10 --output_dir C:\WorkSpace\Toyota\mag\AutoEncoder\output\reconstructions
+python "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/scripts/inference.py" --checkpoint "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/checkpoints/best_model.pth" --image_dir "/media/dl-box/ADATA SE800/Toyota/mag/DataAug/output" --num_samples 30 --output_dir "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/reconstructions"
 ```
 
 **主なパラメータ:**

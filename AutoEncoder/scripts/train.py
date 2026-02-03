@@ -79,7 +79,7 @@ def main():
         help='画像データディレクトリのパス'
     )
     parser.add_argument('--batch_size', type=int, default=32, help='バッチサイズ')
-    parser.add_argument('--epochs', type=int, default=3, help='エポック数')
+    parser.add_argument('--epochs', type=int, default=500, help='エポック数')
     parser.add_argument('--lr', type=float, default=1e-3, help='学習率')
     parser.add_argument('--latent_dim', type=int, default=128, help='潜在空間の次元数')
     parser.add_argument('--image_size', type=int, nargs=2, default=[64, 64], help='画像サイズ [height width]')
@@ -88,7 +88,7 @@ def main():
     parser.add_argument('--device', type=str, default='auto', help='デバイス (auto/cuda/cpu)')
     parser.add_argument('--num_workers', type=int, default=4, help='データローダーのワーカー数')
     parser.add_argument('--early_stopping', action='store_true', help='Early Stoppingを使用する')
-    parser.add_argument('--early_stopping_patience', type=int, default=30, help='Early Stoppingの忍耐度（エポック数）')
+    parser.add_argument('--early_stopping_patience', type=int, default=20, help='Early Stoppingの忍耐度（エポック数）')
     parser.add_argument('--plot_dir', type=str, default=output_path/'plots', help='グラフ保存ディレクトリ')
     
     args = parser.parse_args()
