@@ -13,6 +13,11 @@ dependencies = [
   "tqdm>=4.67.2",
   "matplotlib>=3.10.8",
   "pandas>=2.3.3",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "onnx>=1.16.0",
+  "onnxruntime>=1.18.0",
+  "pillow>=10.0.0",
 ]
 
 # torch系は必ず PyTorch cu117 index から取る（PyPIに逃がさない）
