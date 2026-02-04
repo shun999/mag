@@ -109,8 +109,8 @@ python "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/scripts/inference.py" -
 ### 3. ONNX変換
 
 ```bash
-python /workspace/mag/AutoEncoder/scripts/export_onnx.py \
-    --checkpoint /workspace/mag/AutoEncoder/output/checkpoints/best_model.pth \
-    --output /workspace/mag/AutoEncoder/output/onnx/best_model.onnx \
-    --device cpu
+python "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/scripts/export_onnx.py" \
+    --checkpoint "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/checkpoints/best_model.pth" \
+    --output "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/onnx/best_model.onnx" \
+    --device cpu --opset 17
 ```
