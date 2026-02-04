@@ -36,6 +36,12 @@
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .result { display: grid; gap: 8px; }
     .kv { display: grid; grid-template-columns: 160px 1fr; gap: 8px; font-size: 14px; }
+    .history { display: grid; gap: 8px; }
+    .history-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+    .history-item { padding: 8px 10px; border-radius: 10px; border: 1px solid #1d2330; background: #0f1422; font-size: 12px; }
+    .history-item strong { display: inline-block; min-width: 80px; }
+    .toggle-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .toggle-row label { margin: 0; font-size: 12px; color: #e9edf5; display: inline-flex; gap: 6px; align-items: center; }
     .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #2a3244; }
     .ok { background: rgba(25, 180, 90, 0.12); border-color: rgba(25, 180, 90, 0.35); }
     .ng { background: rgba(255, 70, 70, 0.12); border-color: rgba(255, 70, 70, 0.35); }
@@ -47,6 +53,9 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     footer { padding: 14px 16px; border-top: 1px solid #1d2330; color: #a9b3c7; font-size: 12px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; border: 1px solid #2a3244; }
+    .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #546075; }
+    .pill.on .dot { background: #2f55ff; }
   </style>
 </head>
 
@@ -115,6 +124,30 @@
       </div>
     </div>
 
+    <div style="margin-top:12px" class="row">
+      <div>
+        <label>アラート</label>
+        <div class="toggle-row">
+          <label><input id="alertVibrate" type="checkbox" />振動</label>
+          <label><input id="alertSound" type="checkbox" />サウンド</label>
+          <span id="alertState" class="pill"><span class="dot"></span>アラートOFF</span>
+        </div>
+        <div class="hint" style="margin-top:6px">
+          異常検知時にスマホへ通知します。振動は端末の設定で無効な場合があります。
+        </div>
+      </div>
+      <div>
+        <label>履歴表示</label>
+        <div class="buttons">
+          <button id="clearHistoryBtn" class="secondary" disabled>履歴をクリア</button>
+          <button id="exportHistoryBtn" disabled>履歴をコピー</button>
+        </div>
+        <div class="hint" style="margin-top:6px">
+          直近20件を表示します。コピーでメモや共有ができます。
+        </div>
+      </div>
+    </div>
+
     <img id="preview" class="preview-img" alt="captured preview" />
     <canvas id="canvas" style="display:none;"></canvas>
 
@@ -159,6 +192,14 @@
       </details>
     </div>
   </section>
+
+  <section class="card">
+    <div class="history">
+      <div class="hint">判定履歴</div>
+      <ul id="historyList" class="history-list"></ul>
+      <div id="historyEmpty" class="muted">まだ履歴がありません。</div>
+    </div>
+  </section>
 </main>
 
 <footer>
@@ -189,6 +230,14 @@
   const autoStopBtn  = $("autoStopBtn");
   const autoStateEl  = $("autoState");
 
+  const alertVibrateInput = $("alertVibrate");
+  const alertSoundInput = $("alertSound");
+  const alertStateEl = $("alertState");
+  const clearHistoryBtn = $("clearHistoryBtn");
+  const exportHistoryBtn = $("exportHistoryBtn");
+  const historyList = $("historyList");
+  const historyEmpty = $("historyEmpty");
+
   const statusEl = $("status");
   const mseEl = $("mse");
   const isAnomalyEl = $("isAnomaly");
@@ -197,6 +246,7 @@
   const busyEl = $("busy");
 
   let stream = null;
+  let historyItems = [];
 
   // 自動判定関連
   let autoTimer = null;
@@ -209,6 +259,8 @@
   imageSizeInput.value = localStorage.getItem("imageSize") || "64";
   modelPathInput.value = localStorage.getItem("modelPath") || "";
   intervalMsInput.value = localStorage.getItem("intervalMs") || "1000";
+  alertVibrateInput.checked = localStorage.getItem("alertVibrate") === "true";
+  alertSoundInput.checked = localStorage.getItem("alertSound") === "true";
 
   function setStatus(msg, kind="") {
     statusEl.textContent = msg;
@@ -239,6 +291,85 @@
     }
   }
 
+  function setAlertState() {
+    const enabled = alertVibrateInput.checked || alertSoundInput.checked;
+    alertStateEl.classList.toggle("on", enabled);
+    alertStateEl.innerHTML = `<span class="dot"></span>${enabled ? "アラートON" : "アラートOFF"}`;
+  }
+
+  function saveHistory() {
+    localStorage.setItem("historyItems", JSON.stringify(historyItems));
+  }
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem("historyItems");
+      historyItems = raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      historyItems = [];
+    }
+  }
+
+  function renderHistory() {
+    historyList.innerHTML = "";
+    if (historyItems.length === 0) {
+      historyEmpty.style.display = "block";
+      clearHistoryBtn.disabled = true;
+      exportHistoryBtn.disabled = true;
+      return;
+    }
+
+    historyEmpty.style.display = "none";
+    historyItems.forEach((item) => {
+      const li = document.createElement("li");
+      li.className = "history-item";
+      li.innerHTML = `<strong>${item.label}</strong>${item.mse} (thr: ${item.threshold})<br/><span class="muted">${item.time}</span>`;
+      historyList.appendChild(li);
+    });
+    clearHistoryBtn.disabled = false;
+    exportHistoryBtn.disabled = false;
+  }
+
+  function pushHistory({ mse, threshold, isAnomaly }) {
+    const label = isAnomaly === null ? "判定なし" : (isAnomaly ? "異常" : "正常");
+    historyItems.unshift({
+      label,
+      mse: typeof mse === "number" ? mse.toPrecision(6) : String(mse),
+      threshold: threshold === null || threshold === undefined ? "-" : String(threshold),
+      time: new Date().toLocaleString(),
+    });
+    historyItems = historyItems.slice(0, 20);
+    saveHistory();
+    renderHistory();
+  }
+
+  function vibrateAlert() {
+    if (!alertVibrateInput.checked) return;
+    if ("vibrate" in navigator) {
+      navigator.vibrate([120, 80, 120]);
+    }
+  }
+
+  function soundAlert() {
+    if (!alertSoundInput.checked) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.value = 0.05;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      setTimeout(() => {
+        osc.stop();
+        ctx.close();
+      }, 200);
+    } catch (e) {
+      console.warn("audio alert failed", e);
+    }
+  }
+
   function saveSettings() {
     localStorage.setItem("apiBase", apiBaseInput.value.trim());
     localStorage.setItem("cameraMode", cameraModeSel.value);
@@ -246,6 +377,8 @@
     localStorage.setItem("imageSize", imageSizeInput.value);
     localStorage.setItem("modelPath", modelPathInput.value.trim());
     localStorage.setItem("intervalMs", intervalMsInput.value);
+    localStorage.setItem("alertVibrate", alertVibrateInput.checked);
+    localStorage.setItem("alertSound", alertSoundInput.checked);
   }
 
   async function startCamera() {
@@ -400,12 +533,15 @@
       } else if (isAnomaly) {
         isAnomalyEl.textContent = "true";
         setStatus("ANOMALY", "ng");
+        vibrateAlert();
+        soundAlert();
       } else {
         isAnomalyEl.textContent = "false";
         setStatus("NORMAL", "ok");
       }
 
       rawEl.textContent = JSON.stringify(data, null, 2);
+      pushHistory({ mse, threshold: thr, isAnomaly });
     } catch (err) {
       console.error(err);
       setStatus(String(err), "ng");
@@ -454,6 +590,26 @@
   autoStartBtn.addEventListener("click", startAuto);
   autoStopBtn.addEventListener("click", stopAuto);
 
+  alertVibrateInput.addEventListener("change", () => { saveSettings(); setAlertState(); });
+  alertSoundInput.addEventListener("change", () => { saveSettings(); setAlertState(); });
+
+  clearHistoryBtn.addEventListener("click", () => {
+    historyItems = [];
+    saveHistory();
+    renderHistory();
+  });
+
+  exportHistoryBtn.addEventListener("click", async () => {
+    const lines = historyItems.map((item) => `${item.time}\t${item.label}\t${item.mse}\tthr=${item.threshold}`);
+    const text = lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("履歴をクリップボードにコピーしました", "ok");
+    } catch (err) {
+      setStatus("コピーに失敗しました", "ng");
+    }
+  });
+
   // 対応チェック
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     setStatus("このブラウザはカメラAPIに対応していません", "ng");
@@ -462,6 +618,9 @@
     setStatus("ready");
   }
   setAutoState();
+  setAlertState();
+  loadHistory();
+  renderHistory();
 
   // ページを離れる時に停止
   window.addEventListener("beforeunload", () => {
