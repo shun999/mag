@@ -1,0 +1,33 @@
+[project]
+name = "mag"
+version = "0.1.0"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+  "numpy==1.26.4",
+  # 必要ならここに他の依存を書いてOK
+  "torch==2.0.1",
+  "torchvision==0.15.2",
+  "torchaudio==2.0.2",
+  "tensorboard==2.13.0",
+  "protobuf<4",
+  "tqdm>=4.67.2",
+  "matplotlib>=3.10.8",
+  "pandas>=2.3.3",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "onnx>=1.16.0",
+  "onnxruntime>=1.18.0",
+  "pillow>=10.0.0",
+  "python-multipart>=0.0.22",
+]
+
+# torch系は必ず PyTorch cu117 index から取る（PyPIに逃がさない）
+[tool.uv.sources]
+torch = { index = "pytorch-cu117" }
+torchvision = { index = "pytorch-cu117" }
+torchaudio = { index = "pytorch-cu117" }
+
+[[tool.uv.index]]
+name = "pytorch-cu117"
+url = "https://download.pytorch.org/whl/cu117"
+explicit = true

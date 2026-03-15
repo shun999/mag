@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Env files
+.env
+
+# Models
+*.pt
+*.pth
+*.onnx
+
+# Generated outputs
+AutoEncoder/checkpoints/
+AutoEncoder/output/
+DataAug/output/
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
