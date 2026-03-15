@@ -48,6 +48,7 @@ python mag/AnomalyDetection/scripts/anomaly_detection.py \
 - `--sigma_multiplier`: 閾値計算時の標準偏差の倍数（デフォルト: 3.0 = 3σ）
 - `--num_normal_samples`: 閾値計算に使用する正常データのサンプル数（デフォルト: 100）
 - `--device`: デバイス（auto/cuda/cpu、デフォルト: auto）
+- `--disable_gradcam`: Grad-CAM可視化を無効化する（デフォルト: 有効）
 
 ## 出力
 
@@ -62,7 +63,7 @@ python mag/AnomalyDetection/scripts/anomaly_detection.py \
 
 ### 2. 可視化画像: `*_detection.png`
 
-各画像について、元画像と再構成画像の比較、誤差、判定結果を表示した画像が保存されます。
+各画像について、元画像・再構成画像・Grad-CAM（異常寄与領域）を表示した画像が保存されます。
 
 ### 3. 誤差分布グラフ: `error_distribution.png`
 

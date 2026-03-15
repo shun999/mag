@@ -14,6 +14,7 @@ from PIL import Image
 import torchvision.transforms as T
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import torch.nn.functional as F
 
 # AutoEncoderモジュールをインポート（パスを追加）
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'AutoEncoder' / 'scripts'))
@@ -87,6 +88,66 @@ def calculate_reconstruction_error(model, image_path, image_size=(64, 64), devic
     return mse_error, original_pil, reconstructed_pil
 
 
+def calculate_gradcam_heatmap(model, input_tensor, target_layer=None):
+    """再構成誤差を目的関数にしたGrad-CAMヒートマップを計算"""
+    if target_layer is None:
+        target_layer = model.encoder.encoder[-3]  # 最終Conv2d層
+
+    activations = []
+    gradients = []
+
+    def forward_hook(_, __, output):
+        activations.append(output)
+
+    def full_backward_hook(_, grad_input, grad_output):
+        gradients.append(grad_output[0])
+
+    f_handle = target_layer.register_forward_hook(forward_hook)
+    b_handle = target_layer.register_full_backward_hook(full_backward_hook)
+
+    try:
+        model.zero_grad(set_to_none=True)
+        reconstructed, _ = model(input_tensor)
+        loss = F.mse_loss(reconstructed, input_tensor, reduction='mean')
+        loss.backward()
+
+        if not activations or not gradients:
+            return None
+
+        act = activations[0]
+        grad = gradients[0]
+
+        weights = torch.mean(grad, dim=(2, 3), keepdim=True)
+        cam = torch.sum(weights * act, dim=1, keepdim=True)
+        cam = torch.relu(cam)
+
+        cam_min = cam.min()
+        cam_max = cam.max()
+        cam = (cam - cam_min) / (cam_max - cam_min + 1e-8)
+
+        cam = F.interpolate(
+            cam,
+            size=input_tensor.shape[-2:],
+            mode='bilinear',
+            align_corners=False,
+        )
+        return cam[0, 0].detach().cpu().numpy()
+    finally:
+        f_handle.remove()
+        b_handle.remove()
+
+
+def create_gradcam_overlay(original_pil, heatmap, alpha=0.45):
+    """Grad-CAMヒートマップを元画像に重ね合わせる"""
+    if heatmap is None:
+        return None
+
+    original = np.array(original_pil).astype(np.float32) / 255.0
+    heatmap_img = plt.cm.jet(heatmap)[..., :3]
+    overlay = np.clip((1 - alpha) * original + alpha * heatmap_img, 0, 1)
+    return (overlay * 255).astype(np.uint8)
+
+
 def calculate_threshold_from_normal_data(
     model, normal_data_dir, image_size=(64, 64), device='cpu', 
     num_samples=100, sigma_multiplier=3.0
@@ -146,7 +207,7 @@ def calculate_threshold_from_normal_data(
 
 def detect_anomalies(
     model, anomaly_data_dir, threshold, image_size=(64, 64), 
-    device='cpu', output_dir=None
+    device='cpu', output_dir=None, use_gradcam=True
 ):
     """
     異常データを検出
@@ -182,9 +243,7 @@ def detect_anomalies(
     output_path = Path(output_dir) if output_dir else None
     
     for img_path in tqdm(image_paths, desc="Processing anomaly data"):
-        error, original, reconstructed = calculate_reconstruction_error(
-            model, str(img_path), image_size, device
-        )
+        error, original, reconstructed = calculate_reconstruction_error(model, str(img_path), image_size, device)
         
         if error is not None:
             is_anomaly = error > threshold
@@ -198,8 +257,18 @@ def detect_anomalies(
             
             # 可視化を保存
             if output_path:
+                gradcam_overlay = None
+                if use_gradcam:
+                    transform = T.Compose([
+                        T.Resize(image_size),
+                        T.ToTensor(),
+                    ])
+                    input_tensor = transform(original).unsqueeze(0).to(device)
+                    heatmap = calculate_gradcam_heatmap(model, input_tensor)
+                    gradcam_overlay = create_gradcam_overlay(original, heatmap)
+
                 save_visualization(
-                    original, reconstructed, error, threshold, is_anomaly,
+                    original, reconstructed, gradcam_overlay, error, threshold, is_anomaly,
                     output_path / f"{img_path.stem}_detection.png"
                 )
     
@@ -207,9 +276,11 @@ def detect_anomalies(
     return df
 
 
-def save_visualization(original, reconstructed, error, threshold, is_anomaly, save_path):
+def save_visualization(original, reconstructed, gradcam_overlay, error, threshold, is_anomaly, save_path):
     """検出結果を可視化して保存"""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    has_gradcam = gradcam_overlay is not None
+    cols = 3 if has_gradcam else 2
+    fig, axes = plt.subplots(1, cols, figsize=(6 * cols, 5))
     
     # 元画像
     axes[0].imshow(original)
@@ -225,6 +296,11 @@ def save_visualization(original, reconstructed, error, threshold, is_anomaly, sa
         title += f'\n✓ Normal (≤{threshold:.6f})'
     axes[1].set_title(title, fontsize=12, color='red' if is_anomaly else 'green')
     axes[1].axis('off')
+
+    if has_gradcam:
+        axes[2].imshow(gradcam_overlay)
+        axes[2].set_title('Grad-CAM (Anomaly Localization)', fontsize=12)
+        axes[2].axis('off')
     
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -317,6 +393,11 @@ def main():
         default='auto',
         help='デバイス (auto/cuda/cpu)'
     )
+    parser.add_argument(
+        '--disable_gradcam',
+        action='store_true',
+        help='Grad-CAM可視化を無効化する'
+    )
     
     args = parser.parse_args()
     
@@ -362,7 +443,8 @@ def main():
     print("Detecting anomalies...")
     print("="*60)
     results_df = detect_anomalies(
-        model, args.anomaly_data_dir, threshold, image_size, device, output_dir
+        model, args.anomaly_data_dir, threshold, image_size, device, output_dir,
+        use_gradcam=not args.disable_gradcam
     )
     
     # 結果を保存
