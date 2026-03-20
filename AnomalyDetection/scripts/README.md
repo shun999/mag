@@ -29,11 +29,11 @@ python "/media/dl-box/ADATA SE800/Toyota/mag/AnomalyDetection/scripts/anomaly_de
 
 ```bash
 python AnomalyDetection/scripts/anomaly_detection.py \
-    --checkpoint "AutoEncoder/checkpoints/best_model.pth" \
+    --checkpoint "AutoEncoder/output3/checkpoints/best_model.pth" \
     --normal_data_dir "DataAug/output" \
-    --anomaly_data_dir "AnomalyDetection/data/Fe20" \
-    --output_dir "AnomalyDetection/output/Fe20Heatmap" \
-    --sigma_multiplier 2.0 \
+    --anomaly_data_dir "AnomalyDetection/data/Fe08" \
+    --output_dir "AnomalyDetection/output/Fe08Heatmap_output3" \
+    --sigma_multiplier 3.0 \
     --num_normal_samples 100 \
     --device auto
 ```
