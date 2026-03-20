@@ -20,15 +20,17 @@
 ### 1. 学習
 
 ```bash
-python "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/scripts/train.py" \
-    --data_dir "/media/dl-box/ADATA SE800/Toyota/mag/DataAug/output" \
+python "AutoEncoder/scripts/train.py" \
+    --data_dir "DataAug/output" \
     --batch_size 32 \
-    --epochs 10 \
+    --epochs 500 \
     --lr 0.001 \
     --latent_dim 128 \
     --image_size 64 64 \
-    --save_dir "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/checkpoints" \
-    --log_dir "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/output/logs"
+    --save_dir "AutoEncoder/output3/checkpoints" \
+    --log_dir "AutoEncoder/output3/logs" \
+    --early_stopping \
+    --early_stopping_patience 30 \
 ```
 
 **主なパラメータ:**
