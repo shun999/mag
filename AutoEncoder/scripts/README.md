@@ -47,10 +47,11 @@ python "AutoEncoder/scripts/train.py" \
 
 単一画像を再構成:
 ```bash
-python mag/AutoEncoder/inference.py \
-    --checkpoint ./checkpoints/best_model.pth \
-    --image_path "path/to/image.png" \
-    --output_dir ./reconstructions
+python AutoEncoder/scripts/inference.py \
+    --checkpoint "AutoEncoder/output3/checkpoints/best_model.pth" \
+    --image_dir "DataAug/data" \
+    --output_dir "AutoEncoder/output3/reconstructions" \
+    --num_samples 10
 ```
 ```
 python C:\WorkSpace\Toyota\mag\AutoEncoder\scripts\train.py --data_dir "C:\WorkSpace\Toyota\mag\DataAug\output"   
