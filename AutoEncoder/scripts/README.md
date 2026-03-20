@@ -114,6 +114,7 @@ python "/media/dl-box/ADATA SE800/Toyota/mag/AutoEncoder/scripts/inference.py" -
 ```bash
 python "AutoEncoder/scripts/export_onnx.py" \
     --checkpoint "AutoEncoder/output3/checkpoints/best_model.pth" \
-    --output "AutoEncoder/output/onnx/best_model.onnx" \
-    --device cpu --opset 17
+    --output "AutoEncoder/output3/onnx/best_model.onnx" \
+    --device cpu \
+    --opset 17
 ```
