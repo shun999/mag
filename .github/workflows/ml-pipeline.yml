@@ -66,8 +66,8 @@ jobs:
             -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output" \
             "$IMAGE_TAG" \
             uv run python DataAug/scripts/ImageAug.py \
-              --input_dir /app/DataAug/data \
-              --output_dir /app/DataAug/output \
+              --input_dir DataAug/data \
+              --output_dir DataAug/output \
               --n_each ${{ inputs.n_aug_each || '50' }}
 
       # ────────────────────────────────────────
