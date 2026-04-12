@@ -43,12 +43,12 @@ jobs:
           mkdir -p "${{ github.workspace }}/AnomalyDetection/output"
           mkdir -p "${{ github.workspace }}/mlruns"
 
-      - name: Verify host data directories
+      - name: Sync data from external storage
         run: |
-          echo "=== DataAug/data ==="
-          ls "$HOST_DATAAUG_DATA" | head -10
-          echo "=== AnomalyDetection/data ==="
-          ls "$HOST_ANOMALY_DATA" | head -10
+          rsync -a --info=stats2 \
+            "$HOST_DATAAUG_DATA/" "${{ github.workspace }}/DataAug/data/"
+          rsync -a --info=stats2 \
+            "$HOST_ANOMALY_DATA/" "${{ github.workspace }}/AnomalyDetection/data/"
 
       # ────────────────────────────────────────
       # 2. Docker イメージビルド
@@ -56,18 +56,25 @@ jobs:
       - name: Build Docker image
         run: docker build -t "$IMAGE_TAG" .
 
+      - name: Verify data inside container
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/DataAug/data:/app/DataAug/data:ro" \
+            "$IMAGE_TAG" \
+            ls -la /app/DataAug/data/ | head -15
+
       # ────────────────────────────────────────
       # 3. データ拡張 (DataAug)
       # ────────────────────────────────────────
       - name: Data Augmentation
         run: |
           docker run --rm --gpus all \
-            -v "$HOST_DATAAUG_DATA:/app/DataAug/data:ro" \
+            -v "${{ github.workspace }}/DataAug/data:/app/DataAug/data:ro" \
             -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output" \
             "$IMAGE_TAG" \
             uv run python DataAug/scripts/ImageAug.py \
-              --input_dir DataAug/data \
-              --output_dir DataAug/output \
+              --input_dir /app/DataAug/data \
+              --output_dir /app/DataAug/output \
               --n_each ${{ inputs.n_aug_each || '50' }}
 
       # ────────────────────────────────────────
@@ -93,7 +100,7 @@ jobs:
       - name: Anomaly Detection
         run: |
           docker run --rm --gpus all \
-            -v "$HOST_ANOMALY_DATA:/app/AnomalyDetection/data:ro" \
+            -v "${{ github.workspace }}/AnomalyDetection/data:/app/AnomalyDetection/data:ro" \
             -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output:ro" \
             -v "${{ github.workspace }}/AIbuild/output:/app/AIbuild/output:ro" \
             -v "${{ github.workspace }}/AnomalyDetection/output:/app/AnomalyDetection/output" \
