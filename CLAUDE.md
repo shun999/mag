@@ -36,3 +36,6 @@ DataAug → AIbuild → AnomalyDetection → API
 - `main` — stable / release
 - `dev` — active general development
 - `devcc` — active development of claude code
+
+## 注意事項
+"./DataAug/data"には、画像の元データがあるので、編集しないでください。
