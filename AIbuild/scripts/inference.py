@@ -24,7 +24,8 @@ def load_model(checkpoint_path, device='cuda'):
     model = create_model(
         input_channels=args.get('input_channels', 3),
         latent_dim=args.get('latent_dim', 128),
-        device=device
+        device=device,
+        use_skip=args.get('use_skip', False),
     )
     
     # 重みを読み込み

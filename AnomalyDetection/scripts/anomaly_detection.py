@@ -1,6 +1,11 @@
 """
-AutoEncoderを使用した異常値検出テストスクリプト
-学習済みAutoEncoderモデルを用いて、異常画像の検出を行う
+AutoEncoderを使用した異常値検出スクリプト
+
+改善点:
+  - SSIM異常スコア（ピクセル単位の構造的類似度）
+  - Mahalanobis距離（潜在空間での統計的距離）
+  - MSE + SSIM + Mahalanobis のアンサンブルスコア
+  - AUC-ROC / AUC-PR / F1 評価指標
 """
 
 import argparse
@@ -17,45 +22,110 @@ from tqdm import tqdm
 import torch.nn.functional as F
 
 # AutoEncoderモジュールをインポート（パスを追加）
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'AutoEncoder' / 'scripts'))
-from model import create_model
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'AIbuild' / 'scripts'))
+from model import create_model, SkipAutoEncoder
 
 
+# ============================================================
+# SSIM 計算（ピクセル単位）
+# ============================================================
+def _gaussian_kernel_1d(size: int, sigma: float, device: torch.device) -> torch.Tensor:
+    coords = torch.arange(size, dtype=torch.float32, device=device) - size // 2
+    g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+    return g / g.sum()
+
+
+def _gaussian_kernel_2d(size: int, sigma: float, channels: int, device: torch.device) -> torch.Tensor:
+    k1d = _gaussian_kernel_1d(size, sigma, device)
+    k2d = k1d.unsqueeze(1) @ k1d.unsqueeze(0)
+    k2d = k2d.expand(channels, 1, size, size).contiguous()
+    return k2d
+
+
+def compute_ssim_map(
+    x: torch.Tensor, y: torch.Tensor,
+    window_size: int = 11, sigma: float = 1.5,
+    C1: float = 0.01 ** 2, C2: float = 0.03 ** 2,
+) -> tuple:
+    """ピクセル単位のSSIMマップとスカラーSSIMを返す"""
+    channels = x.size(1)
+    kernel = _gaussian_kernel_2d(window_size, sigma, channels, x.device)
+    pad = window_size // 2
+
+    mu_x = F.conv2d(x, kernel, padding=pad, groups=channels)
+    mu_y = F.conv2d(y, kernel, padding=pad, groups=channels)
+    mu_x2, mu_y2, mu_xy = mu_x ** 2, mu_y ** 2, mu_x * mu_y
+
+    sigma_x2 = F.conv2d(x * x, kernel, padding=pad, groups=channels) - mu_x2
+    sigma_y2 = F.conv2d(y * y, kernel, padding=pad, groups=channels) - mu_y2
+    sigma_xy = F.conv2d(x * y, kernel, padding=pad, groups=channels) - mu_xy
+
+    num = (2 * mu_xy + C1) * (2 * sigma_xy + C2)
+    den = (mu_x2 + mu_y2 + C1) * (sigma_x2 + sigma_y2 + C2)
+    ssim_map = num / den  # [-1, 1]
+
+    return ssim_map, ssim_map.mean().item()
+
+
+# ============================================================
+# Mahalanobis距離
+# ============================================================
+class MahalanobisCalculator:
+    """正常データの潜在ベクトルから統計量を計算し、Mahalanobis距離を算出"""
+
+    def __init__(self):
+        self.mean = None
+        self.inv_cov = None
+
+    def fit(self, latent_vectors: np.ndarray):
+        """正常データの潜在ベクトルから平均・逆共分散行列を算出"""
+        self.mean = np.mean(latent_vectors, axis=0)
+        cov = np.cov(latent_vectors, rowvar=False)
+        # 正則化（特異行列対策）
+        cov += np.eye(cov.shape[0]) * 1e-6
+        self.inv_cov = np.linalg.inv(cov)
+
+    def distance(self, z: np.ndarray) -> float:
+        """1サンプルのMahalanobis距離を返す"""
+        diff = z - self.mean
+        return float(np.sqrt(diff @ self.inv_cov @ diff))
+
+
+# ============================================================
+# モデル読み込み
+# ============================================================
 def load_model(checkpoint_path, device='cpu'):
     """学習済みモデルを読み込む"""
     checkpoint = torch.load(checkpoint_path, map_location=device)
     args = checkpoint.get('args', {})
-    
-    # モデル作成
+
+    use_skip = args.get('use_skip', False)
+
     model = create_model(
         input_channels=args.get('input_channels', 3),
         latent_dim=args.get('latent_dim', 128),
-        device=device
+        device=device,
+        use_skip=use_skip,
     )
-    
-    # 重みを読み込み
+
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    
+
     return model, args
 
 
+# ============================================================
+# 再構成誤差計算（MSE + SSIM + 潜在ベクトル）
+# ============================================================
 def calculate_reconstruction_error(model, image_path, image_size=(64, 64), device='cpu'):
     """
-    画像の再構成誤差を計算
-    
-    Args:
-        model: AutoEncoderモデル
-        image_path: 画像パス
-        image_size: 画像サイズ (height, width)
-        device: デバイス
-    
+    画像の再構成誤差を計算（MSE, SSIM, 潜在ベクトル）
+
     Returns:
-        mse_error: 平均二乗誤差
+        dict: {mse, ssim, latent_vector} or None
         original_img: 元画像（PIL）
         reconstructed_img: 再構成画像（PIL）
     """
-    # 画像を読み込み
     try:
         img = Image.open(image_path)
         if img.mode != 'RGB':
@@ -63,35 +133,53 @@ def calculate_reconstruction_error(model, image_path, image_size=(64, 64), devic
     except Exception as e:
         print(f"Error loading image {image_path}: {e}")
         return None, None, None
-    
-    # 変換
+
     transform = T.Compose([
         T.Resize(image_size),
         T.ToTensor(),
     ])
-    
+
     img_tensor = transform(img).unsqueeze(0).to(device)
-    
-    # 推論
+
     with torch.no_grad():
-        reconstructed, _ = model(img_tensor)
-    
-    # 再構成誤差を計算（MSE）
-    mse = nn.MSELoss(reduction='mean')
-    mse_error = mse(reconstructed, img_tensor).item()
-    
-    # PIL画像に変換
+        reconstructed, latent = model(img_tensor)
+
+    # MSE
+    mse_error = F.mse_loss(reconstructed, img_tensor, reduction='mean').item()
+
+    # SSIM
+    _, ssim_val = compute_ssim_map(reconstructed, img_tensor)
+
+    # 潜在ベクトル
+    latent_np = latent.cpu().squeeze(0).numpy()
+
     to_pil = T.ToPILImage()
     original_pil = to_pil(img_tensor.cpu().squeeze(0))
     reconstructed_pil = to_pil(reconstructed.cpu().squeeze(0))
-    
-    return mse_error, original_pil, reconstructed_pil
+
+    result = {
+        'mse': mse_error,
+        'ssim': ssim_val,
+        'latent_vector': latent_np,
+    }
+    return result, original_pil, reconstructed_pil
+
+
+# ============================================================
+# Grad-CAM
+# ============================================================
+def _get_gradcam_target_layer(model):
+    """モデル構造に応じてGrad-CAMのターゲット層を自動選択"""
+    if isinstance(model, SkipAutoEncoder):
+        return model.encoder.enc4[0]  # 最終Conv2d層
+    else:
+        return model.encoder.encoder[-3]  # 従来モデルの最終Conv2d層
 
 
 def calculate_gradcam_heatmap(model, input_tensor, target_layer=None):
     """再構成誤差を目的関数にしたGrad-CAMヒートマップを計算"""
     if target_layer is None:
-        target_layer = model.encoder.encoder[-3]  # 最終Conv2d層
+        target_layer = _get_gradcam_target_layer(model)
 
     activations = []
     gradients = []
@@ -148,341 +236,445 @@ def create_gradcam_overlay(original_pil, heatmap, alpha=0.45):
     return (overlay * 255).astype(np.uint8)
 
 
+# ============================================================
+# 閾値計算 + Mahalanobis学習
+# ============================================================
 def calculate_threshold_from_normal_data(
-    model, normal_data_dir, image_size=(64, 64), device='cpu', 
+    model, normal_data_dir, image_size=(64, 64), device='cpu',
     num_samples=100, sigma_multiplier=3.0
 ):
     """
-    正常データから閾値を計算
-    
-    Args:
-        model: AutoEncoderモデル
-        normal_data_dir: 正常データディレクトリ
-        image_size: 画像サイズ
-        device: デバイス
-        num_samples: サンプル数
-        sigma_multiplier: 標準偏差の倍数（デフォルト: 3σ）
-    
+    正常データから閾値を計算し、Mahalanobis計算器を学習
+
     Returns:
-        threshold: 閾値
-        mean_error: 平均誤差
-        std_error: 標準偏差
-        errors: 誤差のリスト
+        thresholds: dict {mse_threshold, ssim_threshold, ensemble_threshold}
+        stats: dict {mse_mean, mse_std, ssim_mean, ssim_std}
+        normal_errors: dict {mse: [...], ssim: [...], ensemble: [...]}
+        mahalanobis_calc: MahalanobisCalculator (fitされた状態)
     """
     normal_dir = Path(normal_data_dir)
-    
-    # 画像ファイルを収集
+
     image_paths = []
     for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff']:
         image_paths.extend(list(normal_dir.rglob(f'*{ext}')))
         image_paths.extend(list(normal_dir.rglob(f'*{ext.upper()}')))
-    
+
     image_paths = sorted(image_paths)[:num_samples]
-    
+
     if len(image_paths) == 0:
         raise ValueError(f"No images found in {normal_data_dir}")
-    
+
     print(f"Calculating threshold from {len(image_paths)} normal images...")
-    
-    errors = []
+
+    mse_errors = []
+    ssim_scores = []
+    latent_vectors = []
+
     for img_path in tqdm(image_paths, desc="Processing normal data"):
-        error, _, _ = calculate_reconstruction_error(
+        result, _, _ = calculate_reconstruction_error(
             model, str(img_path), image_size, device
         )
-        if error is not None:
-            errors.append(error)
-    
-    errors = np.array(errors)
-    mean_error = np.mean(errors)
-    std_error = np.std(errors)
-    threshold = mean_error + sigma_multiplier * std_error
-    
+        if result is not None:
+            mse_errors.append(result['mse'])
+            ssim_scores.append(result['ssim'])
+            latent_vectors.append(result['latent_vector'])
+
+    mse_errors = np.array(mse_errors)
+    ssim_scores = np.array(ssim_scores)
+    latent_vectors = np.array(latent_vectors)
+
+    # MSE閾値
+    mse_mean, mse_std = np.mean(mse_errors), np.std(mse_errors)
+    mse_threshold = mse_mean + sigma_multiplier * mse_std
+
+    # SSIM閾値（SSIMは高い=正常なので、低い方向に閾値）
+    ssim_mean, ssim_std = np.mean(ssim_scores), np.std(ssim_scores)
+    ssim_threshold = ssim_mean - sigma_multiplier * ssim_std
+
+    # Mahalanobis
+    mahal_calc = MahalanobisCalculator()
+    mahal_calc.fit(latent_vectors)
+
+    mahal_distances = np.array([mahal_calc.distance(z) for z in latent_vectors])
+    mahal_mean, mahal_std = np.mean(mahal_distances), np.std(mahal_distances)
+    mahal_threshold = mahal_mean + sigma_multiplier * mahal_std
+
+    # アンサンブルスコア: 正規化して統合
+    norm_mse = (mse_errors - mse_mean) / (mse_std + 1e-8)
+    norm_ssim = -(ssim_scores - ssim_mean) / (ssim_std + 1e-8)  # 反転
+    norm_mahal = (mahal_distances - mahal_mean) / (mahal_std + 1e-8)
+    ensemble_scores = (norm_mse + norm_ssim + norm_mahal) / 3.0
+    ensemble_mean, ensemble_std = np.mean(ensemble_scores), np.std(ensemble_scores)
+    ensemble_threshold = ensemble_mean + sigma_multiplier * ensemble_std
+
     print(f"Normal data statistics:")
-    print(f"  Mean error: {mean_error:.6f}")
-    print(f"  Std error: {std_error:.6f}")
-    print(f"  Threshold (mean + {sigma_multiplier}σ): {threshold:.6f}")
-    
-    return threshold, mean_error, std_error, errors
+    print(f"  MSE    - mean: {mse_mean:.6f}, std: {mse_std:.6f}, threshold: {mse_threshold:.6f}")
+    print(f"  SSIM   - mean: {ssim_mean:.6f}, std: {ssim_std:.6f}, threshold: {ssim_threshold:.6f}")
+    print(f"  Mahal  - mean: {mahal_mean:.2f}, std: {mahal_std:.2f}, threshold: {mahal_threshold:.2f}")
+    print(f"  Ensemble threshold: {ensemble_threshold:.4f}")
+
+    thresholds = {
+        'mse': mse_threshold,
+        'ssim': ssim_threshold,
+        'mahalanobis': mahal_threshold,
+        'ensemble': ensemble_threshold,
+    }
+    stats = {
+        'mse_mean': mse_mean, 'mse_std': mse_std,
+        'ssim_mean': ssim_mean, 'ssim_std': ssim_std,
+        'mahal_mean': mahal_mean, 'mahal_std': mahal_std,
+        'ensemble_mean': ensemble_mean, 'ensemble_std': ensemble_std,
+    }
+    normal_errors = {
+        'mse': mse_errors,
+        'ssim': ssim_scores,
+        'mahalanobis': mahal_distances,
+        'ensemble': ensemble_scores,
+    }
+    return thresholds, stats, normal_errors, mahal_calc
 
 
+# ============================================================
+# 異常検出
+# ============================================================
 def detect_anomalies(
-    model, anomaly_data_dir, threshold, image_size=(64, 64), 
-    device='cpu', output_dir=None, use_gradcam=True
+    model, anomaly_data_dir, thresholds, stats, mahal_calc,
+    image_size=(64, 64), device='cpu', output_dir=None, use_gradcam=True
 ):
-    """
-    異常データを検出
-    
-    Args:
-        model: AutoEncoderモデル
-        anomaly_data_dir: 異常データディレクトリ
-        threshold: 閾値
-        image_size: 画像サイズ
-        device: デバイス
-        output_dir: 出力ディレクトリ
-    
-    Returns:
-        results: 結果のDataFrame
-    """
+    """異常データを検出（MSE + SSIM + Mahalanobis アンサンブル）"""
     anomaly_dir = Path(anomaly_data_dir)
-    
-    # 画像ファイルを収集
+
     image_paths = []
     for ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff']:
         image_paths.extend(list(anomaly_dir.rglob(f'*{ext}')))
         image_paths.extend(list(anomaly_dir.rglob(f'*{ext.upper()}')))
-    
+
     image_paths = sorted(image_paths)
-    
+
     if len(image_paths) == 0:
         raise ValueError(f"No images found in {anomaly_data_dir}")
-    
+
     print(f"\nDetecting anomalies in {len(image_paths)} images...")
-    print(f"Threshold: {threshold:.6f}")
-    
+
     results = []
     output_path = Path(output_dir) if output_dir else None
-    
+
     for img_path in tqdm(image_paths, desc="Processing anomaly data"):
-        error, original, reconstructed = calculate_reconstruction_error(model, str(img_path), image_size, device)
-        
-        if error is not None:
-            is_anomaly = error > threshold
+        result, original, reconstructed = calculate_reconstruction_error(
+            model, str(img_path), image_size, device
+        )
+
+        if result is not None:
+            mse_error = result['mse']
+            ssim_val = result['ssim']
+            mahal_dist = mahal_calc.distance(result['latent_vector'])
+
+            # 正規化してアンサンブル
+            norm_mse = (mse_error - stats['mse_mean']) / (stats['mse_std'] + 1e-8)
+            norm_ssim = -(ssim_val - stats['ssim_mean']) / (stats['ssim_std'] + 1e-8)
+            norm_mahal = (mahal_dist - stats['mahal_mean']) / (stats['mahal_std'] + 1e-8)
+            ensemble_score = (norm_mse + norm_ssim + norm_mahal) / 3.0
+
+            is_anomaly_mse = mse_error > thresholds['mse']
+            is_anomaly_ssim = ssim_val < thresholds['ssim']
+            is_anomaly_mahal = mahal_dist > thresholds['mahalanobis']
+            is_anomaly_ensemble = ensemble_score > thresholds['ensemble']
+
             results.append({
                 'image_path': str(img_path),
                 'image_name': img_path.name,
-                'reconstruction_error': error,
-                'is_anomaly': is_anomaly,
-                'threshold': threshold,
+                'mse_error': mse_error,
+                'ssim_score': ssim_val,
+                'mahalanobis_distance': mahal_dist,
+                'ensemble_score': ensemble_score,
+                'is_anomaly_mse': is_anomaly_mse,
+                'is_anomaly_ssim': is_anomaly_ssim,
+                'is_anomaly_mahal': is_anomaly_mahal,
+                'is_anomaly_ensemble': is_anomaly_ensemble,
+                'threshold_mse': thresholds['mse'],
+                'threshold_ssim': thresholds['ssim'],
+                'threshold_mahal': thresholds['mahalanobis'],
+                'threshold_ensemble': thresholds['ensemble'],
             })
-            
-            # 可視化を保存
+
             if output_path:
                 gradcam_overlay = None
                 if use_gradcam:
-                    transform = T.Compose([
-                        T.Resize(image_size),
-                        T.ToTensor(),
-                    ])
+                    transform = T.Compose([T.Resize(image_size), T.ToTensor()])
                     input_tensor = transform(original).unsqueeze(0).to(device)
                     heatmap = calculate_gradcam_heatmap(model, input_tensor)
                     gradcam_overlay = create_gradcam_overlay(original, heatmap)
 
                 save_visualization(
-                    original, reconstructed, gradcam_overlay, error, threshold, is_anomaly,
+                    original, reconstructed, gradcam_overlay,
+                    mse_error, ssim_val, ensemble_score,
+                    thresholds['ensemble'], is_anomaly_ensemble,
                     output_path / f"{img_path.stem}_detection.png"
                 )
-    
+
     df = pd.DataFrame(results)
     return df
 
 
-def save_visualization(original, reconstructed, gradcam_overlay, error, threshold, is_anomaly, save_path):
+# ============================================================
+# 評価指標
+# ============================================================
+def compute_evaluation_metrics(normal_scores, anomaly_scores, score_name="score"):
+    """AUC-ROC, AUC-PR, 最適F1を計算"""
+    from sklearn.metrics import roc_auc_score, average_precision_score, precision_recall_curve, f1_score
+
+    labels = np.concatenate([np.zeros(len(normal_scores)), np.ones(len(anomaly_scores))])
+    scores = np.concatenate([normal_scores, anomaly_scores])
+
+    auc_roc = roc_auc_score(labels, scores)
+    auc_pr = average_precision_score(labels, scores)
+
+    # 最適F1閾値
+    precision, recall, pr_thresholds = precision_recall_curve(labels, scores)
+    f1_vals = 2 * precision * recall / (precision + recall + 1e-8)
+    best_idx = np.argmax(f1_vals)
+    best_f1 = f1_vals[best_idx]
+    best_threshold = pr_thresholds[best_idx] if best_idx < len(pr_thresholds) else 0.0
+
+    return {
+        f'{score_name}_auc_roc': auc_roc,
+        f'{score_name}_auc_pr': auc_pr,
+        f'{score_name}_best_f1': best_f1,
+        f'{score_name}_best_threshold': best_threshold,
+    }
+
+
+# ============================================================
+# 可視化
+# ============================================================
+def save_visualization(original, reconstructed, gradcam_overlay,
+                       mse_error, ssim_val, ensemble_score,
+                       threshold, is_anomaly, save_path):
     """検出結果を可視化して保存"""
     has_gradcam = gradcam_overlay is not None
     cols = 3 if has_gradcam else 2
     fig, axes = plt.subplots(1, cols, figsize=(6 * cols, 5))
-    
-    # 元画像
+
     axes[0].imshow(original)
     axes[0].set_title('Original Image', fontsize=12)
     axes[0].axis('off')
-    
-    # 再構成画像
-    axes[1].imshow(reconstructed)
-    title = f'Reconstructed Image\nError: {error:.6f}'
+
+    title = f'Reconstructed\nMSE: {mse_error:.6f}  SSIM: {ssim_val:.4f}'
     if is_anomaly:
-        title += f'\n⚠ ANOMALY DETECTED (>{threshold:.6f})'
+        title += f'\nANOMALY (score: {ensemble_score:.3f} > {threshold:.3f})'
     else:
-        title += f'\n✓ Normal (≤{threshold:.6f})'
-    axes[1].set_title(title, fontsize=12, color='red' if is_anomaly else 'green')
+        title += f'\nNormal (score: {ensemble_score:.3f})'
+    axes[1].imshow(reconstructed)
+    axes[1].set_title(title, fontsize=11, color='red' if is_anomaly else 'green')
     axes[1].axis('off')
 
     if has_gradcam:
         axes[2].imshow(gradcam_overlay)
         axes[2].set_title('Grad-CAM (Anomaly Localization)', fontsize=12)
         axes[2].axis('off')
-    
+
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
-def plot_error_distribution(normal_errors, anomaly_errors, threshold, save_path=None):
-    """誤差分布を可視化"""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # ヒストグラム
-    axes[0].hist(normal_errors, bins=50, alpha=0.7, label='Normal', color='blue', density=True)
-    axes[0].hist(anomaly_errors, bins=50, alpha=0.7, label='Anomaly', color='red', density=True)
-    axes[0].axvline(threshold, color='black', linestyle='--', linewidth=2, label=f'Threshold ({threshold:.6f})')
-    axes[0].set_xlabel('Reconstruction Error (MSE)')
-    axes[0].set_ylabel('Density')
-    axes[0].set_title('Error Distribution')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-    
-    # ボックスプロット
-    box_data = [normal_errors, anomaly_errors]
-    bp = axes[1].boxplot(box_data, labels=['Normal', 'Anomaly'], patch_artist=True)
-    bp['boxes'][0].set_facecolor('blue')
-    bp['boxes'][1].set_facecolor('red')
-    axes[1].axhline(threshold, color='black', linestyle='--', linewidth=2, label=f'Threshold ({threshold:.6f})')
-    axes[1].set_ylabel('Reconstruction Error (MSE)')
-    axes[1].set_title('Error Comparison')
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-    
+def plot_error_distribution(normal_errors, anomaly_errors, thresholds, save_path=None):
+    """誤差分布を可視化（MSE, SSIM, Ensemble）"""
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+    metrics = [
+        ('mse', 'MSE Error', False),
+        ('ssim', 'SSIM Score', True),  # reversed: low=anomaly
+        ('ensemble', 'Ensemble Score', False),
+    ]
+
+    for i, (key, label, reversed_) in enumerate(metrics):
+        n_vals = normal_errors[key]
+        a_vals = anomaly_errors[key] if key in anomaly_errors else []
+
+        # ヒストグラム
+        axes[0, i].hist(n_vals, bins=40, alpha=0.7, label='Normal', color='blue', density=True)
+        if len(a_vals) > 0:
+            axes[0, i].hist(a_vals, bins=40, alpha=0.7, label='Anomaly', color='red', density=True)
+        if key in thresholds:
+            axes[0, i].axvline(thresholds[key], color='black', linestyle='--', linewidth=2,
+                               label=f'Threshold')
+        axes[0, i].set_xlabel(label)
+        axes[0, i].set_ylabel('Density')
+        axes[0, i].set_title(f'{label} Distribution')
+        axes[0, i].legend()
+        axes[0, i].grid(True, alpha=0.3)
+
+        # ボックスプロット
+        box_data = [n_vals]
+        box_labels = ['Normal']
+        if len(a_vals) > 0:
+            box_data.append(a_vals)
+            box_labels.append('Anomaly')
+        bp = axes[1, i].boxplot(box_data, labels=box_labels, patch_artist=True)
+        colors = ['blue', 'red']
+        for j, box in enumerate(bp['boxes']):
+            box.set_facecolor(colors[j])
+            box.set_alpha(0.5)
+        if key in thresholds:
+            axes[1, i].axhline(thresholds[key], color='black', linestyle='--', linewidth=2)
+        axes[1, i].set_ylabel(label)
+        axes[1, i].set_title(f'{label} Comparison')
+        axes[1, i].grid(True, alpha=0.3)
+
     plt.tight_layout()
-    
+
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved error distribution plot to: {save_path}")
     else:
         plt.show()
-    
     plt.close()
 
 
+# ============================================================
+# main
+# ============================================================
 def main():
     parser = argparse.ArgumentParser(description='Anomaly Detection using AutoEncoder')
-    parser.add_argument(
-        '--checkpoint',
-        type=str,
-        required=True,
-        help='学習済みAutoEncoderモデルのチェックポイントパス'
-    )
-    parser.add_argument(
-        '--normal_data_dir',
-        type=str,
-        default=r'C:\WorkSpace\Toyota\mag\DataAug\output',
-        help='正常データディレクトリ（閾値計算用）'
-    )
-    parser.add_argument(
-        '--anomaly_data_dir',
-        type=str,
-        default=r'C:\WorkSpace\Toyota\mag\AnomalyDetection\data\Fe2.5',
-        help='異常データディレクトリ（検出対象）'
-    )
-    parser.add_argument(
-        '--output_dir',
-        type=str,
-        default=r'C:\WorkSpace\Toyota\mag\AnomalyDetection\output',
-        help='出力ディレクトリ'
-    )
-    parser.add_argument(
-        '--threshold',
-        type=float,
-        default=None,
-        help='閾値（Noneの場合は正常データから自動計算）'
-    )
-    parser.add_argument(
-        '--sigma_multiplier',
-        type=float,
-        default=3.0,
-        help='閾値計算時の標準偏差の倍数（デフォルト: 3.0）'
-    )
-    parser.add_argument(
-        '--num_normal_samples',
-        type=int,
-        default=100,
-        help='閾値計算に使用する正常データのサンプル数'
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default='auto',
-        help='デバイス (auto/cuda/cpu)'
-    )
-    parser.add_argument(
-        '--disable_gradcam',
-        action='store_true',
-        help='Grad-CAM可視化を無効化する'
-    )
-    
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='学習済みAutoEncoderモデルのチェックポイントパス')
+    parser.add_argument('--normal_data_dir', type=str, default='DataAug/output',
+                        help='正常データディレクトリ（閾値計算用）')
+    parser.add_argument('--anomaly_data_dir', type=str, default='AnomalyDetection/data/Fe2.5',
+                        help='異常データディレクトリ（検出対象）')
+    parser.add_argument('--output_dir', type=str, default='AnomalyDetection/output',
+                        help='出力ディレクトリ')
+    parser.add_argument('--threshold', type=float, default=None,
+                        help='MSE閾値（Noneの場合は正常データから自動計算）')
+    parser.add_argument('--sigma_multiplier', type=float, default=3.0,
+                        help='閾値計算時の標準偏差の倍数（デフォルト: 3.0）')
+    parser.add_argument('--num_normal_samples', type=int, default=100,
+                        help='閾値計算に使用する正常データのサンプル数')
+    parser.add_argument('--device', type=str, default='auto',
+                        help='デバイス (auto/cuda/cpu)')
+    parser.add_argument('--disable_gradcam', action='store_true',
+                        help='Grad-CAM可視化を無効化する')
+
     args = parser.parse_args()
-    
+
     # デバイス設定
     if args.device == 'auto':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = torch.device(args.device)
-    
+
     print(f"Using device: {device}")
-    
+
     # 出力ディレクトリ作成
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # モデル読み込み
     print(f"\nLoading model from: {args.checkpoint}")
     model, model_args = load_model(args.checkpoint, device=device)
     img_size = model_args.get('image_size', [64, 64])
     image_size = tuple(img_size) if isinstance(img_size, (list, tuple)) else (64, 64)
     print(f"Model loaded. Image size: {image_size}")
-    
-    # 閾値計算
-    if args.threshold is None:
-        print("\n" + "="*60)
-        print("Calculating threshold from normal data...")
-        print("="*60)
-        threshold, mean_error, std_error, normal_errors = calculate_threshold_from_normal_data(
-            model, args.normal_data_dir, image_size, device,
-            args.num_normal_samples, args.sigma_multiplier
-        )
-    else:
-        threshold = args.threshold
-        print(f"\nUsing provided threshold: {threshold:.6f}")
-        # 正常データの誤差も計算（可視化用）
-        _, _, _, normal_errors = calculate_threshold_from_normal_data(
-            model, args.normal_data_dir, image_size, device,
-            args.num_normal_samples, args.sigma_multiplier
-        )
-    
+    print(f"Model type: {type(model).__name__}")
+
+    # 閾値計算 + Mahalanobis学習
+    print("\n" + "=" * 60)
+    print("Calculating thresholds from normal data...")
+    print("=" * 60)
+    thresholds, stats, normal_errors, mahal_calc = calculate_threshold_from_normal_data(
+        model, args.normal_data_dir, image_size, device,
+        args.num_normal_samples, args.sigma_multiplier
+    )
+
+    # ユーザー指定のMSE閾値があればオーバーライド
+    if args.threshold is not None:
+        thresholds['mse'] = args.threshold
+        print(f"\nOverriding MSE threshold with user value: {args.threshold:.6f}")
+
     # 異常検出
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Detecting anomalies...")
-    print("="*60)
+    print("=" * 60)
     results_df = detect_anomalies(
-        model, args.anomaly_data_dir, threshold, image_size, device, output_dir,
+        model, args.anomaly_data_dir, thresholds, stats, mahal_calc,
+        image_size, device, output_dir,
         use_gradcam=not args.disable_gradcam
     )
-    
+
     # 結果を保存
     csv_path = output_dir / 'anomaly_detection_results.csv'
     results_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
     print(f"\nResults saved to: {csv_path}")
-    
+
     # 統計情報
     total = len(results_df)
-    anomalies = results_df['is_anomaly'].sum()
-    normal = total - anomalies
-    
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Detection Results Summary")
-    print("="*60)
+    print("=" * 60)
     print(f"Total images: {total}")
-    print(f"Anomalies detected: {anomalies} ({anomalies/total*100:.2f}%)")
-    print(f"Normal: {normal} ({normal/total*100:.2f}%)")
-    print(f"Threshold: {threshold:.6f}")
-    print(f"Mean error (anomaly data): {results_df['reconstruction_error'].mean():.6f}")
-    print(f"Std error (anomaly data): {results_df['reconstruction_error'].std():.6f}")
-    print(f"Min error: {results_df['reconstruction_error'].min():.6f}")
-    print(f"Max error: {results_df['reconstruction_error'].max():.6f}")
-    
-    # 異常検出された画像のリスト
-    if anomalies > 0:
-        anomaly_images = results_df[results_df['is_anomaly']]['image_name'].tolist()
-        print(f"\nAnomaly images ({anomalies}):")
-        for img in anomaly_images[:10]:  # 最初の10個を表示
-            print(f"  - {img}")
-        if len(anomaly_images) > 10:
-            print(f"  ... and {len(anomaly_images) - 10} more")
-    
+    for method in ['mse', 'ssim', 'mahal', 'ensemble']:
+        col = f'is_anomaly_{method}'
+        if col in results_df.columns:
+            n_anomaly = results_df[col].sum()
+            print(f"  {method:>10}: {n_anomaly}/{total} anomalies ({n_anomaly/total*100:.1f}%)")
+
+    # 評価指標（sklearnが利用可能な場合）
+    try:
+        print("\n" + "=" * 60)
+        print("Evaluation Metrics (all anomaly data treated as positive)")
+        print("=" * 60)
+
+        anomaly_errors = {
+            'mse': results_df['mse_error'].values,
+            'ssim': -results_df['ssim_score'].values,  # 反転してhigh=anomaly
+            'ensemble': results_df['ensemble_score'].values,
+            'mahalanobis': results_df['mahalanobis_distance'].values,
+        }
+
+        eval_results = {}
+        for score_name, normal_key in [
+            ('mse', 'mse'),
+            ('ssim', 'ssim'),
+            ('ensemble', 'ensemble'),
+            ('mahalanobis', 'mahalanobis'),
+        ]:
+            normal_vals = normal_errors[normal_key]
+            anomaly_vals = anomaly_errors[score_name]
+            # SSIMは反転済みなので正常データも反転
+            if score_name == 'ssim':
+                normal_vals = -normal_vals
+
+            metrics = compute_evaluation_metrics(normal_vals, anomaly_vals, score_name)
+            eval_results.update(metrics)
+            print(f"  {score_name:>10}: AUC-ROC={metrics[f'{score_name}_auc_roc']:.4f}, "
+                  f"AUC-PR={metrics[f'{score_name}_auc_pr']:.4f}, "
+                  f"Best-F1={metrics[f'{score_name}_best_f1']:.4f}")
+
+        # 評価指標をCSVに保存
+        eval_df = pd.DataFrame([eval_results])
+        eval_path = output_dir / 'evaluation_metrics.csv'
+        eval_df.to_csv(eval_path, index=False)
+        print(f"\nEvaluation metrics saved to: {eval_path}")
+
+    except ImportError:
+        print("\nscikit-learn not installed. Skipping evaluation metrics.")
+        print("Install with: pip install scikit-learn")
+        anomaly_errors = {
+            'mse': results_df['mse_error'].values,
+            'ssim': results_df['ssim_score'].values,
+            'ensemble': results_df['ensemble_score'].values,
+        }
+
     # 誤差分布を可視化
-    anomaly_errors = results_df['reconstruction_error'].values
+    plot_anomaly_errors = {
+        'mse': results_df['mse_error'].values,
+        'ssim': results_df['ssim_score'].values,
+        'ensemble': results_df['ensemble_score'].values,
+    }
     plot_path = output_dir / 'error_distribution.png'
-    plot_error_distribution(normal_errors, anomaly_errors, threshold, save_path=str(plot_path))
-    
+    plot_error_distribution(normal_errors, plot_anomaly_errors, thresholds, save_path=str(plot_path))
+
     print(f"\nAll outputs saved to: {output_dir}")
 
 

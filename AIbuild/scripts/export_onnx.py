@@ -18,6 +18,7 @@ def load_model(checkpoint_path, device="cpu"):
         input_channels=args.get("input_channels", 3),
         latent_dim=args.get("latent_dim", 128),
         device=device,
+        use_skip=args.get("use_skip", False),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
