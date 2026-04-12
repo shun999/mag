@@ -1,0 +1,138 @@
+name: ML Pipeline
+
+on:
+  push:
+    branches: [devcc]
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: "学習エポック数"
+        required: false
+        default: "500"
+        type: string
+      n_aug_each:
+        description: "各画像あたりの拡張枚数"
+        required: false
+        default: "50"
+        type: string
+
+# ──────────────────────────────────────────────────────────
+# ホスト PC 上のデータパス（self-hosted runner 環境に合わせて変更）
+# ──────────────────────────────────────────────────────────
+env:
+  IMAGE_TAG: mag-pipeline:${{ github.sha }}
+  HOST_DATAAUG_DATA: "/media/dl-box/ADATA SE800/mag_data/DataAug/data"
+  HOST_ANOMALY_DATA: "/media/dl-box/ADATA SE800/mag_data/AnomalyDetection/data"
+
+jobs:
+  ml-pipeline:
+    runs-on: self-hosted
+    timeout-minutes: 720
+
+    steps:
+      # ────────────────────────────────────────
+      # 1. Checkout & 準備
+      # ────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create output directories
+        run: |
+          mkdir -p "${{ github.workspace }}/DataAug/output"
+          mkdir -p "${{ github.workspace }}/AIbuild/output"
+          mkdir -p "${{ github.workspace }}/AnomalyDetection/output"
+          mkdir -p "${{ github.workspace }}/mlruns"
+
+      - name: Verify host data directories
+        run: |
+          echo "=== DataAug/data ==="
+          ls "$HOST_DATAAUG_DATA" | head -10
+          echo "=== AnomalyDetection/data ==="
+          ls "$HOST_ANOMALY_DATA" | head -10
+
+      # ────────────────────────────────────────
+      # 2. Docker イメージビルド
+      # ────────────────────────────────────────
+      - name: Build Docker image
+        run: docker build -t "$IMAGE_TAG" .
+
+      # ────────────────────────────────────────
+      # 3. データ拡張 (DataAug)
+      # ────────────────────────────────────────
+      - name: Data Augmentation
+        run: |
+          docker run --rm --gpus all \
+            -v "$HOST_DATAAUG_DATA:/app/DataAug/data:ro" \
+            -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output" \
+            "$IMAGE_TAG" \
+            uv run python DataAug/scripts/ImageAug.py \
+              --input_dir DataAug/data \
+              --output_dir DataAug/output \
+              --n_each ${{ inputs.n_aug_each || '50' }}
+
+      # ────────────────────────────────────────
+      # 4. モデル学習 (AIbuild)  ※ self-hosted GPU
+      # ────────────────────────────────────────
+      - name: Train AutoEncoder
+        run: |
+          docker run --rm --gpus all \
+            -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output:ro" \
+            -v "${{ github.workspace }}/AIbuild/output:/app/AIbuild/output" \
+            -v "${{ github.workspace }}/mlruns:/app/mlruns" \
+            "$IMAGE_TAG" \
+            uv run python AIbuild/scripts/train.py \
+              --data_dir DataAug/output \
+              --save_dir AIbuild/output/checkpoints \
+              --log_dir AIbuild/output/logs \
+              --plot_dir AIbuild/output/plots \
+              --epochs ${{ inputs.epochs || '500' }}
+
+      # ────────────────────────────────────────
+      # 5. 異常検知テスト (AnomalyDetection)
+      # ────────────────────────────────────────
+      - name: Anomaly Detection
+        run: |
+          docker run --rm --gpus all \
+            -v "$HOST_ANOMALY_DATA:/app/AnomalyDetection/data:ro" \
+            -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output:ro" \
+            -v "${{ github.workspace }}/AIbuild/output:/app/AIbuild/output:ro" \
+            -v "${{ github.workspace }}/AnomalyDetection/output:/app/AnomalyDetection/output" \
+            "$IMAGE_TAG" \
+            uv run python AnomalyDetection/scripts/anomaly_detection.py \
+              --checkpoint AIbuild/output/checkpoints/best_model.pth \
+              --normal_data_dir DataAug/output \
+              --anomaly_data_dir AnomalyDetection/data \
+              --output_dir AnomalyDetection/output
+
+      # ────────────────────────────────────────
+      # 6. 成果物アップロード
+      # ────────────────────────────────────────
+      - name: Upload training results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: training-results-${{ github.run_number }}
+          path: |
+            AIbuild/output/plots/
+            AIbuild/output/checkpoints/best_model.pth
+
+      - name: Upload anomaly detection results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: anomaly-results-${{ github.run_number }}
+          path: AnomalyDetection/output/
+
+      - name: Upload MLflow data
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mlflow-data-${{ github.run_number }}
+          path: mlruns/
+
+      # ────────────────────────────────────────
+      # 7. クリーンアップ
+      # ────────────────────────────────────────
+      - name: Cleanup Docker image
+        if: always()
+        run: docker rmi "$IMAGE_TAG" || true

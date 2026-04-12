@@ -5,7 +5,12 @@ __pycache__/
 *.onnx
 *.pt
 DataAug/data/
+DataAug/output/
 AIbuild/data/
+AIbuild/output/
 AnomalyDetection/data/
+AnomalyDetection/output/
+mlruns/
 **/*.ipynb
 .git/
+.github/
