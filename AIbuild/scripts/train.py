@@ -7,6 +7,7 @@ AutoEncoderの学習スクリプト
   - Gradient Clipping
   - Mixed Precision Training (AMP)
   - SkipAutoEncoder / 従来AutoEncoder の切り替え
+  - MLflow トラッキング (パラメータ・メトリクス・モデル・アーティファクト)
 """
 
 import argparse
@@ -14,6 +15,8 @@ import os
 import math
 from pathlib import Path
 
+import mlflow
+import mlflow.pytorch
 import torch
 import torch.nn as nn
 import torch.nn.functional as torch_F
@@ -201,6 +204,11 @@ def main():
                         help='AMPを無効化する')
     parser.add_argument('--max_grad_norm', type=float, default=1.0,
                         help='Gradient Clippingの最大ノルム')
+    # MLflow オプション
+    parser.add_argument('--experiment_name', type=str, default='AutoEncoder',
+                        help='MLflow experiment name')
+    parser.add_argument('--run_name', type=str, default=None,
+                        help='MLflow run name (省略時は自動生成)')
 
     args = parser.parse_args()
 
@@ -219,146 +227,203 @@ def main():
     print(f"Loss: {args.loss} (ssim_alpha={args.ssim_alpha})")
     print(f"Scheduler: {args.scheduler}")
 
-    # ディレクトリ作成
-    save_dir = Path(args.save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    log_dir = Path(args.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    plot_dir = Path(args.plot_dir)
-    plot_dir.mkdir(parents=True, exist_ok=True)
+    mlflow.set_experiment(args.experiment_name)
 
-    # TensorBoardライター
-    writer = SummaryWriter(log_dir=str(log_dir))
+    with mlflow.start_run(run_name=args.run_name):
 
-    # データローダー作成
-    print("Loading dataset...")
-    dataloader = create_dataloader(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        image_size=tuple(args.image_size),
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=device.type == 'cuda',
-    )
+        # ディレクトリ作成
+        save_dir = Path(args.save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = Path(args.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        plot_dir = Path(args.plot_dir)
+        plot_dir.mkdir(parents=True, exist_ok=True)
 
-    val_dataloader = create_dataloader(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        image_size=tuple(args.image_size),
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=device.type == 'cuda',
-    )
+        # TensorBoardライター
+        writer = SummaryWriter(log_dir=str(log_dir))
 
-    # モデル作成
-    print("Creating model...")
-    model = create_model(
-        input_channels=3,
-        latent_dim=args.latent_dim,
-        device=device,
-        use_skip=args.use_skip,
-    )
-
-    # 損失関数
-    if args.loss == 'combined':
-        criterion = CombinedLoss(alpha=args.ssim_alpha)
-    else:
-        criterion = nn.MSELoss()
-
-    # オプティマイザー
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-
-    # 学習率スケジューラー
-    if args.scheduler == 'cosine':
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=50, T_mult=2
-        )
-    else:
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5
+        # データローダー作成
+        print("Loading dataset...")
+        dataloader = create_dataloader(
+            data_dir=args.data_dir,
+            batch_size=args.batch_size,
+            image_size=tuple(args.image_size),
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=device.type == 'cuda',
         )
 
-    # AMP Scaler
-    scaler = torch.cuda.amp.GradScaler() if use_amp else None
-
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Starting training for {args.epochs} epochs...")
-    print(f"Early Stopping: {'Enabled' if args.early_stopping else 'Disabled'}")
-    print("-" * 60)
-
-    # 学習用の履歴
-    train_losses = []
-    val_losses = []
-    learning_rates = []
-
-    best_val_loss = float('inf')
-    early_stop_counter = 0
-
-    # 学習ループ
-    for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(
-            model, dataloader, criterion, optimizer, device, epoch,
-            scaler=scaler, max_grad_norm=args.max_grad_norm,
+        val_dataloader = create_dataloader(
+            data_dir=args.data_dir,
+            batch_size=args.batch_size,
+            image_size=tuple(args.image_size),
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=device.type == 'cuda',
         )
-        val_loss = validate(model, val_dataloader, criterion, device, scaler=scaler)
 
-        # スケジューラー更新
+        # モデル作成
+        print("Creating model...")
+        model = create_model(
+            input_channels=3,
+            latent_dim=args.latent_dim,
+            device=device,
+            use_skip=args.use_skip,
+        )
+        total_params = sum(p.numel() for p in model.parameters())
+
+        # 損失関数
+        if args.loss == 'combined':
+            criterion = CombinedLoss(alpha=args.ssim_alpha)
+        else:
+            criterion = nn.MSELoss()
+
+        # オプティマイザー
+        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+        # 学習率スケジューラー
         if args.scheduler == 'cosine':
-            scheduler.step(epoch)
+            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                optimizer, T_0=50, T_mult=2
+            )
         else:
-            scheduler.step(val_loss)
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=5
+            )
 
-        # 履歴に追加
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
-        learning_rates.append(optimizer.param_groups[0]['lr'])
+        # AMP Scaler
+        scaler = torch.cuda.amp.GradScaler() if use_amp else None
 
-        # ログ記録
-        writer.add_scalar('Loss/Train', train_loss, epoch)
-        writer.add_scalar('Loss/Validation', val_loss, epoch)
-        writer.add_scalar('LearningRate', optimizer.param_groups[0]['lr'], epoch)
-
-        print(f"Epoch {epoch}/{args.epochs}")
-        print(f"  Train Loss: {train_loss:.6f}")
-        print(f"  Val Loss: {val_loss:.6f}")
-        print(f"  LR: {optimizer.param_groups[0]['lr']:.6f}")
-
-        # ベストモデルを保存
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            early_stop_counter = 0
-            _save_checkpoint(model, optimizer, epoch, val_loss, args,
-                             save_dir / 'best_model.pth')
-            print(f"  Saved best model (val_loss: {val_loss:.6f})")
-        else:
-            if args.early_stopping:
-                early_stop_counter += 1
-                print(f"  No improvement. Early stopping counter: {early_stop_counter}/{args.early_stopping_patience}")
-                if early_stop_counter >= args.early_stopping_patience:
-                    print(f"\nEarly stopping triggered at epoch {epoch}")
-                    break
-
-        # 定期的にチェックポイントを保存
-        if epoch % 10 == 0:
-            _save_checkpoint(model, optimizer, epoch, val_loss, args,
-                             save_dir / f'checkpoint_epoch_{epoch}.pth')
-
+        print(f"Model parameters: {total_params:,}")
+        print(f"Starting training for {args.epochs} epochs...")
+        print(f"Early Stopping: {'Enabled' if args.early_stopping else 'Disabled'}")
         print("-" * 60)
 
-    # 最終モデルを保存
-    _save_checkpoint(model, optimizer, epoch, val_loss, args,
-                     save_dir / 'final_model.pth')
+        # ──────────────────────────────────────────────────────
+        # MLflow: ハイパーパラメータを記録
+        # ──────────────────────────────────────────────────────
+        mlflow.log_params({
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "latent_dim": args.latent_dim,
+            "image_size": f"{args.image_size[0]}x{args.image_size[1]}",
+            "loss": args.loss,
+            "ssim_alpha": args.ssim_alpha,
+            "scheduler": args.scheduler,
+            "amp": use_amp,
+            "max_grad_norm": args.max_grad_norm,
+            "early_stopping": args.early_stopping,
+            "early_stopping_patience": args.early_stopping_patience,
+            "use_skip": args.use_skip,
+            "model_type": "SkipAutoEncoder" if args.use_skip else "AutoEncoder",
+            "total_params": total_params,
+            "data_dir": args.data_dir,
+        })
 
-    # 学習曲線を描画・保存
-    plot_training_curves(train_losses, val_losses, learning_rates, plot_dir)
+        # 学習用の履歴
+        train_losses = []
+        val_losses = []
+        learning_rates = []
 
-    print(f"\nTraining completed!")
-    print(f"Best validation loss: {best_val_loss:.6f}")
-    print(f"Models saved to: {save_dir}")
-    print(f"Logs saved to: {log_dir}")
-    print(f"Plots saved to: {plot_dir}")
+        best_val_loss = float('inf')
+        best_epoch = 0
+        early_stop_counter = 0
 
-    writer.close()
+        # 学習ループ
+        for epoch in range(1, args.epochs + 1):
+            train_loss = train_epoch(
+                model, dataloader, criterion, optimizer, device, epoch,
+                scaler=scaler, max_grad_norm=args.max_grad_norm,
+            )
+            val_loss = validate(model, val_dataloader, criterion, device, scaler=scaler)
+
+            # スケジューラー更新
+            if args.scheduler == 'cosine':
+                scheduler.step(epoch)
+            else:
+                scheduler.step(val_loss)
+
+            current_lr = optimizer.param_groups[0]['lr']
+
+            # 履歴に追加
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            learning_rates.append(current_lr)
+
+            # TensorBoard ログ
+            writer.add_scalar('Loss/Train', train_loss, epoch)
+            writer.add_scalar('Loss/Validation', val_loss, epoch)
+            writer.add_scalar('LearningRate', current_lr, epoch)
+
+            # ──────────────────────────────────────────────────
+            # MLflow: エポック毎メトリクスを記録
+            # ──────────────────────────────────────────────────
+            mlflow.log_metrics({
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "learning_rate": current_lr,
+            }, step=epoch)
+
+            print(f"Epoch {epoch}/{args.epochs}")
+            print(f"  Train Loss: {train_loss:.6f}")
+            print(f"  Val Loss: {val_loss:.6f}")
+            print(f"  LR: {current_lr:.6f}")
+
+            # ベストモデルを保存
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_epoch = epoch
+                early_stop_counter = 0
+                best_ckpt_path = save_dir / 'best_model.pth'
+                _save_checkpoint(model, optimizer, epoch, val_loss, args, best_ckpt_path)
+                print(f"  Saved best model (val_loss: {val_loss:.6f})")
+
+                # ──────────────────────────────────────────────
+                # MLflow: ベストモデルを上書き記録
+                # ──────────────────────────────────────────────
+                mlflow.pytorch.log_model(model, artifact_path="best_model")
+            else:
+                if args.early_stopping:
+                    early_stop_counter += 1
+                    print(f"  No improvement. Early stopping counter: {early_stop_counter}/{args.early_stopping_patience}")
+                    if early_stop_counter >= args.early_stopping_patience:
+                        print(f"\nEarly stopping triggered at epoch {epoch}")
+                        break
+
+            # 定期的にチェックポイントを保存
+            if epoch % 10 == 0:
+                _save_checkpoint(model, optimizer, epoch, val_loss, args,
+                                 save_dir / f'checkpoint_epoch_{epoch}.pth')
+
+            print("-" * 60)
+
+        # 最終モデルを保存
+        _save_checkpoint(model, optimizer, epoch, val_loss, args,
+                         save_dir / 'final_model.pth')
+
+        # 学習曲線を描画・保存
+        plot_training_curves(train_losses, val_losses, learning_rates, plot_dir)
+
+        # ──────────────────────────────────────────────────────
+        # MLflow: サマリーメトリクス・アーティファクトを記録
+        # ──────────────────────────────────────────────────────
+        mlflow.log_metrics({
+            "best_val_loss": best_val_loss,
+            "best_epoch": best_epoch,
+            "actual_epochs": epoch,
+        })
+        mlflow.log_artifact(str(save_dir / 'best_model.pth'), artifact_path="checkpoints")
+        mlflow.log_artifacts(str(plot_dir), artifact_path="plots")
+
+        print(f"\nTraining completed!")
+        print(f"Best validation loss: {best_val_loss:.6f} (epoch {best_epoch})")
+        print(f"Models saved to: {save_dir}")
+        print(f"Logs saved to: {log_dir}")
+        print(f"Plots saved to: {plot_dir}")
+        print(f"MLflow experiment: {args.experiment_name}")
+
+        writer.close()
 
 
 def plot_training_curves(train_losses, val_losses, learning_rates, save_dir):
