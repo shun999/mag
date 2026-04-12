@@ -14,8 +14,8 @@ import onnxruntime as ort
 
 
 DEFAULT_MODEL_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "AutoEncoder"
+    Path(__file__).resolve().parents[1]
+    / "AIbuild"
     / "output3"
     / "onnx"
     / "best_model.onnx"
