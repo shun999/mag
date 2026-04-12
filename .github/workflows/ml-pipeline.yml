@@ -67,7 +67,7 @@ jobs:
             "$IMAGE_TAG" \
             uv run python DataAug/scripts/ImageAug.py \
               --input_dir /app/DataAug/data \
-              --output_dir DataAug/output \
+              --output_dir /app/DataAug/output \
               --n_each ${{ inputs.n_aug_each || '50' }}
 
       # ────────────────────────────────────────
