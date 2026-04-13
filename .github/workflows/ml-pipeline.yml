@@ -135,4 +135,13 @@ jobs:
       # ────────────────────────────────────────
       - name: Cleanup Docker image
         if: always()
-        run: docker rmi "$IMAGE_TAG" || true
+        run: docker rmi "$IMAGE_TAG" 2>/dev/null || true
+
+      - name: Fix file permissions for next run
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" \
+            "${{ github.workspace }}/DataAug" \
+            "${{ github.workspace }}/AIbuild" \
+            "${{ github.workspace }}/AnomalyDetection" \
+            "${{ github.workspace }}/mlruns" 2>/dev/null || true
