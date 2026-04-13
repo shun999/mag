@@ -16,7 +16,6 @@ import math
 from pathlib import Path
 
 import mlflow
-import mlflow.pytorch
 import torch
 import torch.nn as nn
 import torch.nn.functional as torch_F
@@ -382,7 +381,7 @@ def main():
                 # ──────────────────────────────────────────────
                 # MLflow: ベストモデルを上書き記録
                 # ──────────────────────────────────────────────
-                mlflow.pytorch.log_model(model, artifact_path="best_model")
+                mlflow.log_artifact(str(best_ckpt_path), artifact_path="checkpoints")
             else:
                 if args.early_stopping:
                     early_stop_counter += 1
