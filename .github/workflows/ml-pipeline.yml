@@ -27,7 +27,7 @@ env:
 jobs:
   ml-pipeline:
     runs-on: self-hosted
-    timeout-minutes: 720
+    timeout-minutes: 7200
 
     steps:
       # ────────────────────────────────────────
