@@ -15,6 +15,16 @@ on:
         required: false
         default: "50"
         type: string
+      accuracy_threshold:
+        description: "精度ゲート閾値 (0.0-1.0)"
+        required: false
+        default: "0.80"
+        type: string
+      accuracy_metric:
+        description: "精度ゲートに使用するメトリクス名 (例: ensemble_best_f1, ensemble_auc_roc)"
+        required: false
+        default: "ensemble_best_f1"
+        type: string
 
 # ──────────────────────────────────────────────────────────
 # ホスト PC 上のデータパス（self-hosted runner 環境に合わせて変更）
@@ -78,6 +88,7 @@ jobs:
       # ────────────────────────────────────────
       - name: Train AutoEncoder
         run: |
+          set -o pipefail
           docker run --rm --gpus all \
             -v "${{ github.workspace }}/DataAug/output:/app/DataAug/output:ro" \
             -v "${{ github.workspace }}/AIbuild/output:/app/AIbuild/output" \
@@ -88,7 +99,8 @@ jobs:
               --save_dir AIbuild/output/checkpoints \
               --log_dir AIbuild/output/logs \
               --plot_dir AIbuild/output/plots \
-              --epochs ${{ inputs.epochs || '500' }}
+              --epochs ${{ inputs.epochs || '500' }} \
+            2>&1 | tee "${{ github.workspace }}/train_output.log"
 
       # ────────────────────────────────────────
       # 5. 異常検知テスト (AnomalyDetection)
@@ -108,7 +120,207 @@ jobs:
               --output_dir AnomalyDetection/output
 
       # ────────────────────────────────────────
-      # 6. 成果物アップロード
+      # 6. メトリクス抽出・精度ゲート判定
+      # ────────────────────────────────────────
+      - name: Extract metrics
+        id: metrics
+        run: |
+          # 学習ログから best_val_loss と best_epoch を抽出
+          BEST_VAL_LOSS=$(grep -oP 'Best validation loss: \K[0-9.]+' \
+            "${{ github.workspace }}/train_output.log" 2>/dev/null || echo "N/A")
+          BEST_EPOCH=$(grep -oP 'Best validation loss: [0-9.]+ \(epoch \K[0-9]+' \
+            "${{ github.workspace }}/train_output.log" 2>/dev/null || echo "N/A")
+          echo "best_val_loss=${BEST_VAL_LOSS}" >> "$GITHUB_OUTPUT"
+          echo "best_epoch=${BEST_EPOCH}" >> "$GITHUB_OUTPUT"
+
+          # evaluation_metrics.csv から全メトリクスを GITHUB_OUTPUT に追記
+          EVAL_CSV="${{ github.workspace }}/AnomalyDetection/output/evaluation_metrics.csv"
+          python3 -c "
+          import csv, sys, os
+          with open(sys.argv[1]) as f:
+              row = next(csv.DictReader(f))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              for k, v in row.items():
+                  out.write(f'{k}={v}\n')
+          " "$EVAL_CSV"
+
+          # 精度ゲート判定
+          METRIC_NAME="${{ inputs.accuracy_metric || 'ensemble_best_f1' }}"
+          THRESHOLD="${{ inputs.accuracy_threshold || '0.80' }}"
+          METRIC_VALUE=$(python3 -c "
+          import csv, sys
+          with open(sys.argv[1]) as f:
+              row = next(csv.DictReader(f))
+          print(row.get(sys.argv[2], '0'))
+          " "$EVAL_CSV" "$METRIC_NAME")
+          PASS=$(python3 -c "
+          import sys
+          try:
+              val = float(sys.argv[1])
+          except ValueError:
+              val = 0.0
+          print('true' if val >= float(sys.argv[2]) else 'false')
+          " "$METRIC_VALUE" "$THRESHOLD")
+
+          echo "accuracy_pass=${PASS}" >> "$GITHUB_OUTPUT"
+          echo "gate_metric_name=${METRIC_NAME}" >> "$GITHUB_OUTPUT"
+          echo "gate_metric_value=${METRIC_VALUE}" >> "$GITHUB_OUTPUT"
+          echo "gate_threshold=${THRESHOLD}" >> "$GITHUB_OUTPUT"
+          echo "=== 精度ゲート ==="
+          echo "  ${METRIC_NAME} = ${METRIC_VALUE} (閾値: ${THRESHOLD}) → ${PASS}"
+
+      # ────────────────────────────────────────
+      # 7. CML レポート
+      # ────────────────────────────────────────
+      - name: Setup CML
+        uses: iterative/setup-cml@v2
+
+      - name: Create CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPORT="${{ github.workspace }}/cml_report.md"
+          WORKSPACE="${{ github.workspace }}"
+          GATE_PASS="${{ steps.metrics.outputs.accuracy_pass }}"
+
+          # Markdown レポートを構築
+          {
+            echo "## ML Pipeline レポート"
+            echo ""
+            echo "### 学習サマリー"
+            echo ""
+            echo "| メトリクス | 値 |"
+            echo "|---|---|"
+            echo "| Best Validation Loss | \`${{ steps.metrics.outputs.best_val_loss }}\` |"
+            echo "| Best Epoch | \`${{ steps.metrics.outputs.best_epoch }}\` |"
+            echo ""
+            echo "### 異常検知評価"
+            echo ""
+            echo "| 手法 | AUC-ROC | AUC-PR | Best F1 |"
+            echo "|---|---|---|---|"
+            echo "| MSE | \`${{ steps.metrics.outputs.mse_auc_roc }}\` | \`${{ steps.metrics.outputs.mse_auc_pr }}\` | \`${{ steps.metrics.outputs.mse_best_f1 }}\` |"
+            echo "| SSIM | \`${{ steps.metrics.outputs.ssim_auc_roc }}\` | \`${{ steps.metrics.outputs.ssim_auc_pr }}\` | \`${{ steps.metrics.outputs.ssim_best_f1 }}\` |"
+            echo "| Ensemble | \`${{ steps.metrics.outputs.ensemble_auc_roc }}\` | \`${{ steps.metrics.outputs.ensemble_auc_pr }}\` | \`${{ steps.metrics.outputs.ensemble_best_f1 }}\` |"
+            echo "| Mahalanobis | \`${{ steps.metrics.outputs.mahalanobis_auc_roc }}\` | \`${{ steps.metrics.outputs.mahalanobis_auc_pr }}\` | \`${{ steps.metrics.outputs.mahalanobis_best_f1 }}\` |"
+            echo ""
+            echo "### 精度ゲート"
+            echo ""
+            echo "| 項目 | 値 |"
+            echo "|---|---|"
+            echo "| メトリクス | \`${{ steps.metrics.outputs.gate_metric_name }}\` |"
+            echo "| スコア | \`${{ steps.metrics.outputs.gate_metric_value }}\` |"
+            echo "| 閾値 | \`${{ steps.metrics.outputs.gate_threshold }}\` |"
+            if [ "$GATE_PASS" = "true" ]; then
+              echo "| 結果 | :white_check_mark: **PASS** |"
+            else
+              echo "| 結果 | :x: **FAIL** |"
+            fi
+          } > "$REPORT"
+
+          # 学習曲線プロット
+          echo "" >> "$REPORT"
+          echo "### 学習曲線" >> "$REPORT"
+          if [ -f "${WORKSPACE}/AIbuild/output/plots/training_curves.png" ]; then
+            cml asset publish "${WORKSPACE}/AIbuild/output/plots/training_curves.png" --md >> "$REPORT"
+          fi
+          if [ -f "${WORKSPACE}/AIbuild/output/plots/loss_detail.png" ]; then
+            cml asset publish "${WORKSPACE}/AIbuild/output/plots/loss_detail.png" --md >> "$REPORT"
+          fi
+
+          # エラー分布プロット
+          echo "" >> "$REPORT"
+          echo "### エラー分布" >> "$REPORT"
+          if [ -f "${WORKSPACE}/AnomalyDetection/output/error_distribution.png" ]; then
+            cml asset publish "${WORKSPACE}/AnomalyDetection/output/error_distribution.png" --md >> "$REPORT"
+          fi
+
+          cml comment create "$REPORT"
+
+      # ────────────────────────────────────────
+      # 8. Discord 通知
+      # ────────────────────────────────────────
+      - name: Discord notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL が設定されていないためスキップします"
+            exit 0
+          fi
+          python3 -c "
+          import json, urllib.request, os, sys
+          url = os.environ['DISCORD_WEBHOOK_URL']
+          passed = '${{ steps.metrics.outputs.accuracy_pass }}' == 'true'
+          color = 3066993 if passed else 15158332
+          status = '\u2705 PASS' if passed else '\u274c FAIL'
+          sha = '${{ github.sha }}'
+          payload = {
+            'embeds': [{
+              'title': 'ML Pipeline \u5b8c\u4e86',
+              'url': 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              'color': color,
+              'fields': [
+                {'name': '\u30b3\u30df\u30c3\u30c8', 'value': '[\`' + sha[:7] + '\`](https://github.com/${{ github.repository }}/commit/' + sha + ')', 'inline': True},
+                {'name': '\u30d6\u30e9\u30f3\u30c1', 'value': '\`${{ github.ref_name }}\`', 'inline': True},
+                {'name': '\u7cbe\u5ea6\u30b2\u30fc\u30c8', 'value': status, 'inline': True},
+                {'name': 'Best Val Loss', 'value': '\`${{ steps.metrics.outputs.best_val_loss }}\`', 'inline': True},
+                {'name': 'Ensemble AUC-ROC', 'value': '\`${{ steps.metrics.outputs.ensemble_auc_roc }}\`', 'inline': True},
+                {'name': 'Ensemble F1', 'value': '\`${{ steps.metrics.outputs.ensemble_best_f1 }}\`', 'inline': True},
+                {'name': 'MSE F1', 'value': '\`${{ steps.metrics.outputs.mse_best_f1 }}\`', 'inline': True},
+                {'name': 'SSIM F1', 'value': '\`${{ steps.metrics.outputs.ssim_best_f1 }}\`', 'inline': True},
+                {'name': 'Mahalanobis F1', 'value': '\`${{ steps.metrics.outputs.mahalanobis_best_f1 }}\`', 'inline': True},
+                {'name': '\u30b2\u30fc\u30c8\u6761\u4ef6', 'value': '\`${{ steps.metrics.outputs.gate_metric_name }}\` = \`${{ steps.metrics.outputs.gate_metric_value }}\` (\u95be\u5024: \`${{ steps.metrics.outputs.gate_threshold }}\`)', 'inline': False},
+              ]
+            }]
+          }
+          data = json.dumps(payload).encode('utf-8')
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+          with urllib.request.urlopen(req) as r:
+            print(f'Discord \u901a\u77e5\u5b8c\u4e86: {r.status}')
+          "
+
+      # ────────────────────────────────────────
+      # 9. GHCR へ Docker イメージ Push (精度ゲート通過時のみ)
+      # ────────────────────────────────────────
+      - name: Push Docker image to GHCR
+        if: steps.metrics.outputs.accuracy_pass == 'true'
+        run: |
+          IMAGE_SHA="ghcr.io/${{ github.repository }}:${{ github.sha }}"
+          IMAGE_LATEST="ghcr.io/${{ github.repository }}:latest"
+          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io \
+            -u "${{ github.repository_owner }}" --password-stdin
+          docker tag "$IMAGE_TAG" "$IMAGE_SHA"
+          docker tag "$IMAGE_TAG" "$IMAGE_LATEST"
+          docker push "$IMAGE_SHA"
+          docker push "$IMAGE_LATEST"
+          docker logout ghcr.io
+          echo "Push 完了: $IMAGE_SHA"
+          echo "Push 完了: $IMAGE_LATEST"
+
+      # ────────────────────────────────────────
+      # 10. Hugging Face へ best model Push (精度ゲート通過時のみ)
+      # ────────────────────────────────────────
+      - name: Push model to Hugging Face
+        if: steps.metrics.outputs.accuracy_pass == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN が設定されていないためスキップします"
+            exit 0
+          fi
+          pip install --quiet huggingface-hub
+          huggingface-cli upload \
+            "salade999/MAG_Anomaly_model" \
+            "${{ github.workspace }}/AIbuild/output/checkpoints/best_model.pth" \
+            "best_model.pth" \
+            --commit-message "Update model from commit ${{ github.sha }}" \
+            --commit-description "ensemble_best_f1=${{ steps.metrics.outputs.ensemble_best_f1 }}, best_val_loss=${{ steps.metrics.outputs.best_val_loss }}"
+          echo "HF アップロード完了: salade999/MAG_Anomaly_model/best_model.pth"
+
+      # ────────────────────────────────────────
+      # 11. 成果物アップロード
       # ────────────────────────────────────────
       - name: Upload training results
         uses: actions/upload-artifact@v4
@@ -134,11 +346,14 @@ jobs:
           path: mlruns/
 
       # ────────────────────────────────────────
-      # 7. クリーンアップ
+      # 12. クリーンアップ
       # ────────────────────────────────────────
       - name: Cleanup Docker image
         if: always()
-        run: docker rmi "$IMAGE_TAG" 2>/dev/null || true
+        run: |
+          docker rmi "$IMAGE_TAG" 2>/dev/null || true
+          docker rmi "ghcr.io/${{ github.repository }}:${{ github.sha }}" 2>/dev/null || true
+          docker rmi "ghcr.io/${{ github.repository }}:latest" 2>/dev/null || true
 
       - name: Fix file permissions for next run
         if: always()
