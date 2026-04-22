@@ -8,12 +8,12 @@ on:
       epochs:
         description: "学習エポック数"
         required: false
-        default: "500"
+        default: "10"
         type: string
       n_aug_each:
         description: "各画像あたりの拡張枚数"
         required: false
-        default: "50"
+        default: "5"
         type: string
       accuracy_threshold:
         description: "精度ゲート閾値 (0.0-1.0)"
