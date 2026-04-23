@@ -170,17 +170,13 @@ jobs:
           echo "  ${METRIC_NAME} = ${METRIC_VALUE} (閾値: ${THRESHOLD}) → ${PASS}"
 
       # ────────────────────────────────────────
-      # 7. CML レポート
+      # 7. レポート作成 & GitHub コメント投稿
       # ────────────────────────────────────────
-      - name: Setup CML
-        uses: iterative/setup-cml@v2
-
-      - name: Create CML report
+      - name: Create and post report
         env:
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPORT="${{ github.workspace }}/cml_report.md"
-          WORKSPACE="${{ github.workspace }}"
           GATE_PASS="${{ steps.metrics.outputs.accuracy_pass }}"
 
           # Markdown レポートを構築
@@ -215,26 +211,30 @@ jobs:
             else
               echo "| 結果 | :x: **FAIL** |"
             fi
+            echo ""
+            echo "### プロット"
+            echo ""
+            echo "> 学習曲線・エラー分布グラフは Artifacts (\`training-results-${{ github.run_number }}\`) をご参照ください。"
           } > "$REPORT"
 
-          # 学習曲線プロット
-          echo "" >> "$REPORT"
-          echo "### 学習曲線" >> "$REPORT"
-          if [ -f "${WORKSPACE}/AIbuild/output/plots/training_curves.png" ]; then
-            cml asset publish "${WORKSPACE}/AIbuild/output/plots/training_curves.png" --md >> "$REPORT"
-          fi
-          if [ -f "${WORKSPACE}/AIbuild/output/plots/loss_detail.png" ]; then
-            cml asset publish "${WORKSPACE}/AIbuild/output/plots/loss_detail.png" --md >> "$REPORT"
-          fi
-
-          # エラー分布プロット
-          echo "" >> "$REPORT"
-          echo "### エラー分布" >> "$REPORT"
-          if [ -f "${WORKSPACE}/AnomalyDetection/output/error_distribution.png" ]; then
-            cml asset publish "${WORKSPACE}/AnomalyDetection/output/error_distribution.png" --md >> "$REPORT"
-          fi
-
-          cml comment create "$REPORT"
+          # GitHub コミットコメントとして投稿
+          python3 -c "
+          import json, urllib.request, os
+          with open('$REPORT') as f:
+              body = f.read()
+          token = os.environ['GITHUB_TOKEN']
+          sha = '${{ github.sha }}'
+          repo = '${{ github.repository }}'
+          url = f'https://api.github.com/repos/{repo}/commits/{sha}/comments'
+          payload = json.dumps({'body': body}).encode('utf-8')
+          req = urllib.request.Request(url, data=payload, headers={
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json'
+          })
+          with urllib.request.urlopen(req) as r:
+              print(f'GitHub コメント投稿完了: {r.status}')
+          "
 
       # ────────────────────────────────────────
       # 8. Discord 通知
