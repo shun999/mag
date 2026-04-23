@@ -301,7 +301,7 @@ jobs:
             exit 0
           fi
           pip install --quiet huggingface-hub
-          huggingface-cli upload \
+          hf upload \
             "salade999/MAG_Anomaly_model" \
             "${{ github.workspace }}/AIbuild/output/checkpoints/best_model.pth" \
             "best_model.pth" \
