@@ -173,8 +173,6 @@ jobs:
       # 7. レポート作成 & GitHub コメント投稿
       # ────────────────────────────────────────
       - name: Create and post report
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPORT="${{ github.workspace }}/cml_report.md"
           GATE_PASS="${{ steps.metrics.outputs.accuracy_pass }}"
@@ -217,24 +215,8 @@ jobs:
             echo "> 学習曲線・エラー分布グラフは Artifacts (\`training-results-${{ github.run_number }}\`) をご参照ください。"
           } > "$REPORT"
 
-          # GitHub コミットコメントとして投稿
-          python3 -c "
-          import json, urllib.request, os
-          with open('$REPORT') as f:
-              body = f.read()
-          token = os.environ['GITHUB_TOKEN']
-          sha = '${{ github.sha }}'
-          repo = '${{ github.repository }}'
-          url = f'https://api.github.com/repos/{repo}/commits/{sha}/comments'
-          payload = json.dumps({'body': body}).encode('utf-8')
-          req = urllib.request.Request(url, data=payload, headers={
-              'Authorization': f'Bearer {token}',
-              'Accept': 'application/vnd.github+json',
-              'Content-Type': 'application/json'
-          })
-          with urllib.request.urlopen(req) as r:
-              print(f'GitHub コメント投稿完了: {r.status}')
-          "
+          # ワークフロー実行サマリーに出力
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 
       # ────────────────────────────────────────
       # 8. Discord 通知
