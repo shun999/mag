@@ -292,7 +292,21 @@ jobs:
           "
 
       # ────────────────────────────────────────
-      # 9. GHCR へ Docker イメージ Push (精度ゲート通過時のみ)
+      # 9. ONNX モデル変換 (精度ゲート通過時のみ)
+      # ────────────────────────────────────────
+      - name: Convert model to ONNX
+        if: steps.metrics.outputs.accuracy_pass == 'true'
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/AIbuild/output:/app/AIbuild/output" \
+            "$IMAGE_TAG" \
+            uv run python AIbuild/scripts/export_onnx.py \
+              --checkpoint AIbuild/output/checkpoints/best_model.pth \
+              --output AIbuild/output/checkpoints/best_model.onnx \
+              --device cpu
+
+      # ────────────────────────────────────────
+      # 10. GHCR へ Docker イメージ Push (精度ゲート通過時のみ)
       # ────────────────────────────────────────
       - name: Push Docker image to GHCR
         if: steps.metrics.outputs.accuracy_pass == 'true'
@@ -329,6 +343,13 @@ jobs:
             --commit-message "Update model from commit ${{ github.sha }}" \
             --commit-description "ensemble_best_f1=${{ steps.metrics.outputs.ensemble_best_f1 }}, best_val_loss=${{ steps.metrics.outputs.best_val_loss }}"
           echo "HF アップロード完了: salade999/MAG_Anomaly_model/best_model.pth"
+          hf upload \
+            "salade999/MAG_Anomaly_model" \
+            "${{ github.workspace }}/AIbuild/output/checkpoints/best_model.onnx" \
+            "best_model.onnx" \
+            --commit-message "Update ONNX model from commit ${{ github.sha }}" \
+            --commit-description "ensemble_best_f1=${{ steps.metrics.outputs.ensemble_best_f1 }}, best_val_loss=${{ steps.metrics.outputs.best_val_loss }}"
+          echo "HF アップロード完了: salade999/MAG_Anomaly_model/best_model.onnx"
 
       # ────────────────────────────────────────
       # 11. 成果物アップロード
@@ -341,6 +362,7 @@ jobs:
           path: |
             AIbuild/output/plots/
             AIbuild/output/checkpoints/best_model.pth
+            AIbuild/output/checkpoints/best_model.onnx
 
       - name: Upload anomaly detection results
         uses: actions/upload-artifact@v4
