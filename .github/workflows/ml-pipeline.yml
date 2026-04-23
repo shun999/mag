@@ -258,7 +258,7 @@ jobs:
             }]
           }
           data = json.dumps(payload).encode('utf-8')
-          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json', 'User-Agent': 'GitHub-Actions-ML-Pipeline'})
           try:
               with urllib.request.urlopen(req) as r:
                   print(f'Discord \u901a\u77e5\u5b8c\u4e86: {r.status}')
