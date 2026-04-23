@@ -222,6 +222,13 @@ jobs:
             else
               echo "| 結果 | :x: **FAIL** |"
             fi
+          } > "$REPORT"
+
+          # ワークフロー実行サマリーに出力（画像なし）
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+          # プロット画像セクションを追記（CML コメント用）
+          {
             echo ""
             echo "### プロット"
             echo ""
@@ -233,13 +240,10 @@ jobs:
             echo ""
             echo "#### エラー分布"
             echo "![Error Distribution](${{ github.workspace }}/AnomalyDetection/output/error_distribution.png)"
-          } > "$REPORT"
+          } >> "$REPORT"
 
-          # コミットコメントとして投稿
+          # コミットコメントとして投稿（画像込み）
           cml comment create "$REPORT"
-
-          # ワークフロー実行サマリーにも出力
-          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 
       # ────────────────────────────────────────
       # 8. Discord 通知
