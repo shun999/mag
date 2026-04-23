@@ -54,25 +54,30 @@ def ssim(
     C2: float = 0.03 ** 2,
 ) -> torch.Tensor:
     """バッチ平均SSIMを返す (値域 [-1, 1])"""
-    channels = x.size(1)
-    kernel = _gaussian_kernel_2d(window_size, sigma, channels, x.device)
+    # AMP (float16) では分散計算が不安定になるため float32 で実行
+    with torch.amp.autocast(device_type='cuda', enabled=False):
+        x = x.float()
+        y = y.float()
 
-    mu_x = torch_F.conv2d(x, kernel, padding=window_size // 2, groups=channels)
-    mu_y = torch_F.conv2d(y, kernel, padding=window_size // 2, groups=channels)
+        channels = x.size(1)
+        kernel = _gaussian_kernel_2d(window_size, sigma, channels, x.device)
 
-    mu_x2 = mu_x ** 2
-    mu_y2 = mu_y ** 2
-    mu_xy = mu_x * mu_y
+        mu_x = torch_F.conv2d(x, kernel, padding=window_size // 2, groups=channels)
+        mu_y = torch_F.conv2d(y, kernel, padding=window_size // 2, groups=channels)
 
-    sigma_x2 = torch_F.conv2d(x * x, kernel, padding=window_size // 2, groups=channels) - mu_x2
-    sigma_y2 = torch_F.conv2d(y * y, kernel, padding=window_size // 2, groups=channels) - mu_y2
-    sigma_xy = torch_F.conv2d(x * y, kernel, padding=window_size // 2, groups=channels) - mu_xy
+        mu_x2 = mu_x ** 2
+        mu_y2 = mu_y ** 2
+        mu_xy = mu_x * mu_y
 
-    num = (2 * mu_xy + C1) * (2 * sigma_xy + C2)
-    den = (mu_x2 + mu_y2 + C1) * (sigma_x2 + sigma_y2 + C2)
+        sigma_x2 = torch_F.conv2d(x * x, kernel, padding=window_size // 2, groups=channels) - mu_x2
+        sigma_y2 = torch_F.conv2d(y * y, kernel, padding=window_size // 2, groups=channels) - mu_y2
+        sigma_xy = torch_F.conv2d(x * y, kernel, padding=window_size // 2, groups=channels) - mu_xy
 
-    ssim_map = num / den
-    return ssim_map.mean()
+        num = (2 * mu_xy + C1) * (2 * sigma_xy + C2)
+        den = (mu_x2 + mu_y2 + C1) * (sigma_x2 + sigma_y2 + C2)
+
+        ssim_map = num / den
+        return ssim_map.mean()
 
 
 class CombinedLoss(nn.Module):
@@ -85,7 +90,7 @@ class CombinedLoss(nn.Module):
 
     def forward(self, pred, target):
         mse_loss = self.mse(pred, target)
-        ssim_val = ssim(pred, target)
+        ssim_val = ssim(pred.float(), target.float())
         ssim_loss = 1.0 - ssim_val
         return mse_loss + self.alpha * ssim_loss
 
