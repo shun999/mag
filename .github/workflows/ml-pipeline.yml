@@ -30,7 +30,6 @@ on:
 # ホスト PC 上のデータパス（self-hosted runner 環境に合わせて変更）
 # ──────────────────────────────────────────────────────────
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   IMAGE_TAG: mag-pipeline:${{ github.sha }}
   HOST_DATAAUG_DATA: "/media/dl-box/ADATA SE800/mag_data/DataAug/data"
   HOST_ANOMALY_DATA: "/media/dl-box/ADATA SE800/mag_data/AnomalyDetection/data"
@@ -51,7 +50,7 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}" 2>/dev/null || true
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Create output directories
         run: |
@@ -177,12 +176,12 @@ jobs:
       # 7. CML レポート作成 & コミットコメント投稿
       # ────────────────────────────────────────
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
       - name: Setup CML
-        uses: iterative/setup-cml@v3
+        run: npm install -g @dvcorg/cml
 
       - name: Create and post CML report
         env:
@@ -355,7 +354,7 @@ jobs:
       # 11. 成果物アップロード
       # ────────────────────────────────────────
       - name: Upload training results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: always()
         with:
           name: training-results-${{ github.run_number }}
@@ -365,14 +364,14 @@ jobs:
             AIbuild/output/checkpoints/best_model.onnx
 
       - name: Upload anomaly detection results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: always()
         with:
           name: anomaly-results-${{ github.run_number }}
           path: AnomalyDetection/output/
 
       - name: Upload MLflow data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: always()
         with:
           name: mlflow-data-${{ github.run_number }}
