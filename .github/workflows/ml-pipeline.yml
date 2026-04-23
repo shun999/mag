@@ -190,7 +190,21 @@ jobs:
           REPORT="${{ github.workspace }}/cml_report.md"
           GATE_PASS="${{ steps.metrics.outputs.accuracy_pass }}"
 
-          # Markdown レポートを構築
+          # プロット画像を cml publish でアップロードし URL を取得
+          TRAINING_CURVES=""
+          LOSS_DETAIL=""
+          ERROR_DIST=""
+          if [ -f "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" ]; then
+            TRAINING_CURVES=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" --md)
+          fi
+          if [ -f "${{ github.workspace }}/AIbuild/output/plots/loss_detail.png" ]; then
+            LOSS_DETAIL=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/loss_detail.png" --md)
+          fi
+          if [ -f "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" ]; then
+            ERROR_DIST=$(cml publish "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" --md)
+          fi
+
+          # Markdown レポートを構築（URL ベースの画像）
           {
             echo "## ML Pipeline レポート"
             echo ""
@@ -222,28 +236,24 @@ jobs:
             else
               echo "| 結果 | :x: **FAIL** |"
             fi
-          } > "$REPORT"
-
-          # ワークフロー実行サマリーに出力（画像なし）
-          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
-
-          # プロット画像セクションを追記（CML コメント用）
-          {
             echo ""
             echo "### プロット"
             echo ""
             echo "#### 学習曲線"
-            echo "![Training Curves](${{ github.workspace }}/AIbuild/output/plots/training_curves.png)"
+            echo "${TRAINING_CURVES}"
             echo ""
             echo "#### 損失詳細"
-            echo "![Loss Detail](${{ github.workspace }}/AIbuild/output/plots/loss_detail.png)"
+            echo "${LOSS_DETAIL}"
             echo ""
             echo "#### エラー分布"
-            echo "![Error Distribution](${{ github.workspace }}/AnomalyDetection/output/error_distribution.png)"
-          } >> "$REPORT"
+            echo "${ERROR_DIST}"
+          } > "$REPORT"
 
-          # コミットコメントとして投稿（画像込み）
+          # コミットコメントとして投稿
           cml comment create "$REPORT"
+
+          # ワークフロー実行サマリーにも出力
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 
       # ────────────────────────────────────────
       # 8. Discord 通知
