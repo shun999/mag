@@ -175,6 +175,11 @@ jobs:
       # ────────────────────────────────────────
       # 7. CML レポート作成 & コミットコメント投稿
       # ────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Setup CML
         uses: iterative/setup-cml@v3
 
