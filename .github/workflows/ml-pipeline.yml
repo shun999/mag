@@ -30,6 +30,7 @@ on:
 # ホスト PC 上のデータパス（self-hosted runner 環境に合わせて変更）
 # ──────────────────────────────────────────────────────────
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   IMAGE_TAG: mag-pipeline:${{ github.sha }}
   HOST_DATAAUG_DATA: "/media/dl-box/ADATA SE800/mag_data/DataAug/data"
   HOST_ANOMALY_DATA: "/media/dl-box/ADATA SE800/mag_data/AnomalyDetection/data"
@@ -190,20 +191,6 @@ jobs:
           REPORT="${{ github.workspace }}/cml_report.md"
           GATE_PASS="${{ steps.metrics.outputs.accuracy_pass }}"
 
-          # プロット画像を CML で公開
-          TRAINING_CURVES=""
-          LOSS_DETAIL=""
-          ERROR_DIST=""
-          if [ -f "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" ]; then
-            TRAINING_CURVES=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" --md)
-          fi
-          if [ -f "${{ github.workspace }}/AIbuild/output/plots/loss_detail.png" ]; then
-            LOSS_DETAIL=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/loss_detail.png" --md)
-          fi
-          if [ -f "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" ]; then
-            ERROR_DIST=$(cml publish "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" --md)
-          fi
-
           # Markdown レポートを構築
           {
             echo "## ML Pipeline レポート"
@@ -240,13 +227,13 @@ jobs:
             echo "### プロット"
             echo ""
             echo "#### 学習曲線"
-            echo "${TRAINING_CURVES}"
+            echo "![Training Curves](${{ github.workspace }}/AIbuild/output/plots/training_curves.png)"
             echo ""
             echo "#### 損失詳細"
-            echo "${LOSS_DETAIL}"
+            echo "![Loss Detail](${{ github.workspace }}/AIbuild/output/plots/loss_detail.png)"
             echo ""
             echo "#### エラー分布"
-            echo "${ERROR_DIST}"
+            echo "![Error Distribution](${{ github.workspace }}/AnomalyDetection/output/error_distribution.png)"
           } > "$REPORT"
 
           # コミットコメントとして投稿
