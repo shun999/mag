@@ -103,6 +103,8 @@ jobs:
               --log_dir AIbuild/output/logs \
               --plot_dir AIbuild/output/plots \
               --epochs ${{ inputs.epochs || '10' }} \
+              --early_stopping True \
+              --early_stopping_patience 10 \
             2>&1 | tee "${{ github.workspace }}/train_output.log"
 
       # ────────────────────────────────────────
