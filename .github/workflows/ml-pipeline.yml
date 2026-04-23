@@ -25,6 +25,11 @@ on:
         required: false
         default: "ensemble_best_f1"
         type: string
+      early_stopping_patience:
+        description: "Early Stopping 忍耐度（エポック数）"
+        required: false
+        default: "20"
+        type: string
 
 # ──────────────────────────────────────────────────────────
 # ホスト PC 上のデータパス（self-hosted runner 環境に合わせて変更）
@@ -103,8 +108,8 @@ jobs:
               --log_dir AIbuild/output/logs \
               --plot_dir AIbuild/output/plots \
               --epochs ${{ inputs.epochs || '10' }} \
-              --early_stopping true \
-              --early_stopping_patience 10 \
+              --early_stopping \
+              --early_stopping_patience ${{ inputs.early_stopping_patience || '20' }} \
             2>&1 | tee "${{ github.workspace }}/train_output.log"
 
       # ────────────────────────────────────────
