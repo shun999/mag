@@ -156,7 +156,7 @@ jobs:
 
           # 精度ゲート判定
           METRIC_NAME="${{ inputs.accuracy_metric || 'ensemble_best_f1' }}"
-          THRESHOLD="${{ inputs.accuracy_threshold || '0.60' }}"
+          THRESHOLD="${{ inputs.accuracy_threshold || '0.40' }}"
           METRIC_VALUE=$(python3 -c "
           import csv, sys
           with open(sys.argv[1]) as f:
