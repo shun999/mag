@@ -38,6 +38,9 @@ jobs:
   ml-pipeline:
     runs-on: self-hosted
     timeout-minutes: 7200
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       # ────────────────────────────────────────
@@ -275,8 +278,8 @@ jobs:
         run: |
           IMAGE_SHA="ghcr.io/${{ github.repository }}:${{ github.sha }}"
           IMAGE_LATEST="ghcr.io/${{ github.repository }}:latest"
-          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io \
-            -u "${{ github.repository_owner }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
           docker tag "$IMAGE_TAG" "$IMAGE_SHA"
           docker tag "$IMAGE_TAG" "$IMAGE_LATEST"
           docker push "$IMAGE_SHA"
