@@ -39,7 +39,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 7200
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -173,12 +173,31 @@ jobs:
           echo "  ${METRIC_NAME} = ${METRIC_VALUE} (閾値: ${THRESHOLD}) → ${PASS}"
 
       # ────────────────────────────────────────
-      # 7. レポート作成 & GitHub コメント投稿
+      # 7. CML レポート作成 & コミットコメント投稿
       # ────────────────────────────────────────
-      - name: Create and post report
+      - name: Setup CML
+        uses: iterative/setup-cml@v3
+
+      - name: Create and post CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPORT="${{ github.workspace }}/cml_report.md"
           GATE_PASS="${{ steps.metrics.outputs.accuracy_pass }}"
+
+          # プロット画像を CML で公開
+          TRAINING_CURVES=""
+          LOSS_DETAIL=""
+          ERROR_DIST=""
+          if [ -f "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" ]; then
+            TRAINING_CURVES=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" --md)
+          fi
+          if [ -f "${{ github.workspace }}/AIbuild/output/plots/loss_detail.png" ]; then
+            LOSS_DETAIL=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/loss_detail.png" --md)
+          fi
+          if [ -f "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" ]; then
+            ERROR_DIST=$(cml publish "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" --md)
+          fi
 
           # Markdown レポートを構築
           {
@@ -215,10 +234,20 @@ jobs:
             echo ""
             echo "### プロット"
             echo ""
-            echo "> 学習曲線・エラー分布グラフは Artifacts (\`training-results-${{ github.run_number }}\`) をご参照ください。"
+            echo "#### 学習曲線"
+            echo "${TRAINING_CURVES}"
+            echo ""
+            echo "#### 損失詳細"
+            echo "${LOSS_DETAIL}"
+            echo ""
+            echo "#### エラー分布"
+            echo "${ERROR_DIST}"
           } > "$REPORT"
 
-          # ワークフロー実行サマリーに出力
+          # コミットコメントとして投稿
+          cml comment create "$REPORT"
+
+          # ワークフロー実行サマリーにも出力
           cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 
       # ────────────────────────────────────────
