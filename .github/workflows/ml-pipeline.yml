@@ -325,6 +325,13 @@ jobs:
               --output AIbuild/output/checkpoints/best_model.onnx \
               --device cpu
 
+      - name: Copy detection stats alongside ONNX model
+        if: steps.metrics.outputs.accuracy_pass == 'true'
+        run: |
+          cp "${{ github.workspace }}/AnomalyDetection/output/detection_stats.npz" \
+             "${{ github.workspace }}/AIbuild/output/checkpoints/detection_stats.npz"
+          echo "detection_stats.npz copied to AIbuild/output/checkpoints/"
+
       # ────────────────────────────────────────
       # 10. GHCR へ Docker イメージ Push (精度ゲート通過時のみ)
       # ────────────────────────────────────────
@@ -370,6 +377,13 @@ jobs:
             --commit-message "Update ONNX model from commit ${{ github.sha }}" \
             --commit-description "ensemble_best_f1=${{ steps.metrics.outputs.ensemble_best_f1 }}, best_val_loss=${{ steps.metrics.outputs.best_val_loss }}"
           echo "HF アップロード完了: salade999/MAG_Anomaly_model/best_model.onnx"
+          hf upload \
+            "salade999/MAG_Anomaly_model" \
+            "${{ github.workspace }}/AIbuild/output/checkpoints/detection_stats.npz" \
+            "detection_stats.npz" \
+            --commit-message "Update detection stats from commit ${{ github.sha }}" \
+            --commit-description "ensemble_best_f1=${{ steps.metrics.outputs.ensemble_best_f1 }}"
+          echo "HF アップロード完了: salade999/MAG_Anomaly_model/detection_stats.npz"
 
       # ────────────────────────────────────────
       # 11. 成果物アップロード
@@ -383,6 +397,7 @@ jobs:
             AIbuild/output/plots/
             AIbuild/output/checkpoints/best_model.pth
             AIbuild/output/checkpoints/best_model.onnx
+            AIbuild/output/checkpoints/detection_stats.npz
 
       - name: Upload anomaly detection results
         uses: actions/upload-artifact@v6

@@ -620,6 +620,7 @@ def main():
             print(f"  {method:>10}: {n_anomaly}/{total} anomalies ({n_anomaly/total*100:.1f}%)")
 
     # 評価指標（sklearnが利用可能な場合）
+    eval_results = {}
     try:
         print("\n" + "=" * 60)
         print("Evaluation Metrics (all anomaly data treated as positive)")
@@ -665,6 +666,31 @@ def main():
             'ssim': results_df['ssim_score'].values,
             'ensemble': results_df['ensemble_score'].values,
         }
+
+    # 検出統計量をnpzファイルに保存（API用）
+    stats_data = {
+        'mse_mean': np.float64(stats['mse_mean']),
+        'mse_std': np.float64(stats['mse_std']),
+        'ssim_mean': np.float64(stats['ssim_mean']),
+        'ssim_std': np.float64(stats['ssim_std']),
+        'mahal_mean': np.float64(stats['mahal_mean']),
+        'mahal_std': np.float64(stats['mahal_std']),
+        'ensemble_mean': np.float64(stats['ensemble_mean']),
+        'ensemble_std': np.float64(stats['ensemble_std']),
+        'mse_threshold': np.float64(thresholds['mse']),
+        'ssim_threshold': np.float64(thresholds['ssim']),
+        'mahal_threshold': np.float64(thresholds['mahalanobis']),
+        'ensemble_threshold': np.float64(thresholds['ensemble']),
+        'latent_mean': mahal_calc.mean,
+        'inv_cov': mahal_calc.inv_cov,
+    }
+    if eval_results.get('ensemble_best_threshold') is not None:
+        stats_data['ensemble_best_threshold'] = np.float64(
+            eval_results['ensemble_best_threshold']
+        )
+    stats_path = output_dir / 'detection_stats.npz'
+    np.savez(stats_path, **stats_data)
+    print(f"Detection stats saved to: {stats_path}")
 
     # 誤差分布を可視化
     plot_anomaly_errors = {
