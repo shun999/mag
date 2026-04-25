@@ -89,7 +89,7 @@ jobs:
             uv run python DataAug/scripts/ImageAug.py \
               --input_dir /app/DataAug/data \
               --output_dir /app/DataAug/output \
-              --n_each ${{ inputs.n_aug_each || '30' }}
+              --n_each ${{ inputs.n_aug_each || '1' }}
 
       # ────────────────────────────────────────
       # 4. モデル学習 (AIbuild)  ※ self-hosted GPU
@@ -107,7 +107,7 @@ jobs:
               --save_dir AIbuild/output/checkpoints \
               --log_dir AIbuild/output/logs \
               --plot_dir AIbuild/output/plots \
-              --epochs ${{ inputs.epochs || '300' }} \
+              --epochs ${{ inputs.epochs || '10' }} \
               --early_stopping \
               --early_stopping_patience ${{ inputs.early_stopping_patience || '30' }} \
             2>&1 | tee "${{ github.workspace }}/train_output.log"
