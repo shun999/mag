@@ -328,6 +328,7 @@ jobs:
       - name: Copy detection stats alongside ONNX model
         if: steps.metrics.outputs.accuracy_pass == 'true'
         run: |
+          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/AIbuild/output/checkpoints"
           cp "${{ github.workspace }}/AnomalyDetection/output/detection_stats.npz" \
              "${{ github.workspace }}/AIbuild/output/checkpoints/detection_stats.npz"
           echo "detection_stats.npz copied to AIbuild/output/checkpoints/"
