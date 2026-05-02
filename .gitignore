@@ -1,26 +1,25 @@
-# Virtual environment
-.venv/
-venv/
-
-# Python cache
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
-
-# Env files
-.env
-
-# Models
-*.pt
-*.pth
-*.onnx
-
-# Generated outputs
+﻿# checkpoints / weights
 AutoEncoder/checkpoints/
-AutoEncoder/output/
+*.pth
+*.pt
+
+# generated images / outputs
 DataAug/output/
 
-# Editor / OS
-.vscode/
+# common large artifacts
+*.zip
+*.npz
+*.pkl
+*.h5
+*.onnx
+
+# OS/editor
 .DS_Store
 Thumbs.db
+.vscode/
+
+# PATH data
+.env*
+*.pem
+*.onnx
+*.npz
