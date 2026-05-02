@@ -17,3 +17,9 @@ DataAug/output/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# PATH data
+.env*
+*.pem
+*.onnx
+*.npz
