@@ -201,6 +201,8 @@ jobs:
           TRAINING_CURVES=""
           LOSS_DETAIL=""
           ERROR_DIST=""
+          CONFUSION_MATRICES=""
+          ROC_CURVES=""
           if [ -f "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" ]; then
             TRAINING_CURVES=$(cml publish "${{ github.workspace }}/AIbuild/output/plots/training_curves.png" --md)
           fi
@@ -209,6 +211,12 @@ jobs:
           fi
           if [ -f "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" ]; then
             ERROR_DIST=$(cml publish "${{ github.workspace }}/AnomalyDetection/output/error_distribution.png" --md)
+          fi
+          if [ -f "${{ github.workspace }}/AnomalyDetection/output/confusion_matrices.png" ]; then
+            CONFUSION_MATRICES=$(cml publish "${{ github.workspace }}/AnomalyDetection/output/confusion_matrices.png" --md)
+          fi
+          if [ -f "${{ github.workspace }}/AnomalyDetection/output/roc_curves.png" ]; then
+            ROC_CURVES=$(cml publish "${{ github.workspace }}/AnomalyDetection/output/roc_curves.png" --md)
           fi
 
           # Markdown レポートを構築（URL ベースの画像）
@@ -254,6 +262,12 @@ jobs:
             echo ""
             echo "#### エラー分布"
             echo "${ERROR_DIST}"
+            echo ""
+            echo "#### 混同行列 (Confusion Matrices)"
+            echo "${CONFUSION_MATRICES}"
+            echo ""
+            echo "#### ROC曲線"
+            echo "${ROC_CURVES}"
           } > "$REPORT"
 
           # コミットコメントとして投稿

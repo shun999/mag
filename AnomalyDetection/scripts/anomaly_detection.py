@@ -532,6 +532,86 @@ def plot_error_distribution(normal_errors, anomaly_errors, thresholds, save_path
     plt.close()
 
 
+def plot_confusion_matrices(all_normal_scores, all_anomaly_scores,
+                            best_thresholds, save_path=None):
+    """4手法の混同行列を2x2サブプロットで可視化"""
+    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+    methods = ['mse', 'ssim', 'ensemble', 'mahalanobis']
+    display_names = {'mse': 'MSE', 'ssim': 'SSIM',
+                     'ensemble': 'Ensemble', 'mahalanobis': 'Mahalanobis'}
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+    for idx, method in enumerate(methods):
+        ax = axes[idx // 2][idx % 2]
+        normal_scores = all_normal_scores[method]
+        anomaly_scores = all_anomaly_scores[method]
+        threshold = best_thresholds[method]
+
+        labels = np.concatenate([np.zeros(len(normal_scores)),
+                                 np.ones(len(anomaly_scores))])
+        scores = np.concatenate([normal_scores, anomaly_scores])
+        predictions = (scores >= threshold).astype(int)
+
+        cm = confusion_matrix(labels, predictions, labels=[0, 1])
+        disp = ConfusionMatrixDisplay(cm, display_labels=['Normal', 'Anomaly'])
+        disp.plot(ax=ax, cmap='Blues', colorbar=False)
+        ax.set_title(f'{display_names[method]}  (threshold={threshold:.4f})',
+                     fontsize=12)
+
+    plt.suptitle('Confusion Matrices', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved confusion matrices plot to: {save_path}")
+    else:
+        plt.show()
+    plt.close()
+
+
+def plot_roc_curves(all_normal_scores, all_anomaly_scores, save_path=None):
+    """4手法のROC曲線を1つのプロットに重ねて描画"""
+    from sklearn.metrics import roc_curve, auc
+
+    methods = ['mse', 'ssim', 'ensemble', 'mahalanobis']
+    colors = {'mse': 'blue', 'ssim': 'orange',
+              'ensemble': 'green', 'mahalanobis': 'red'}
+    display_names = {'mse': 'MSE', 'ssim': 'SSIM',
+                     'ensemble': 'Ensemble', 'mahalanobis': 'Mahalanobis'}
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+
+    for method in methods:
+        normal_scores = all_normal_scores[method]
+        anomaly_scores = all_anomaly_scores[method]
+
+        labels = np.concatenate([np.zeros(len(normal_scores)),
+                                 np.ones(len(anomaly_scores))])
+        scores = np.concatenate([normal_scores, anomaly_scores])
+
+        fpr, tpr, _ = roc_curve(labels, scores)
+        roc_auc = auc(fpr, tpr)
+        ax.plot(fpr, tpr, color=colors[method], lw=2,
+                label=f'{display_names[method]} (AUC={roc_auc:.3f})')
+
+    ax.plot([0, 1], [0, 1], 'k--', lw=1, label='Random')
+    ax.set_xlabel('False Positive Rate', fontsize=12)
+    ax.set_ylabel('True Positive Rate', fontsize=12)
+    ax.set_title('ROC Curves', fontsize=14, fontweight='bold')
+    ax.legend(loc='lower right', fontsize=11)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved ROC curves plot to: {save_path}")
+    else:
+        plt.show()
+    plt.close()
+
+
 # ============================================================
 # main
 # ============================================================
@@ -634,6 +714,8 @@ def main():
         }
 
         eval_results = {}
+        aligned_normal = {}
+        aligned_anomaly = {}
         for score_name, normal_key in [
             ('mse', 'mse'),
             ('ssim', 'ssim'),
@@ -646,11 +728,27 @@ def main():
             if score_name == 'ssim':
                 normal_vals = -normal_vals
 
+            aligned_normal[score_name] = normal_vals
+            aligned_anomaly[score_name] = anomaly_vals
+
             metrics = compute_evaluation_metrics(normal_vals, anomaly_vals, score_name)
             eval_results.update(metrics)
             print(f"  {score_name:>10}: AUC-ROC={metrics[f'{score_name}_auc_roc']:.4f}, "
                   f"AUC-PR={metrics[f'{score_name}_auc_pr']:.4f}, "
                   f"Best-F1={metrics[f'{score_name}_best_f1']:.4f}")
+
+        # 混同行列プロット
+        best_thresholds = {
+            name: eval_results[f'{name}_best_threshold']
+            for name in ['mse', 'ssim', 'ensemble', 'mahalanobis']
+        }
+        cm_path = output_dir / 'confusion_matrices.png'
+        plot_confusion_matrices(aligned_normal, aligned_anomaly,
+                                best_thresholds, save_path=str(cm_path))
+
+        # ROC曲線プロット
+        roc_path = output_dir / 'roc_curves.png'
+        plot_roc_curves(aligned_normal, aligned_anomaly, save_path=str(roc_path))
 
         # 評価指標をCSVに保存
         eval_df = pd.DataFrame([eval_results])
